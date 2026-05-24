@@ -3609,6 +3609,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "tessera-render"
+version = "0.1.0"
+
+[[package]]
 name = "tessera-store"
 version = "0.1.0"
 dependencies = [
