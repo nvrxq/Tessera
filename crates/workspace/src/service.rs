@@ -158,6 +158,42 @@ impl WorkspaceService {
     pub fn status_of(&self, workspace_id: Uuid) -> Option<tessera_core::AgentStatus> {
         self.statuses.lock().unwrap().get(&workspace_id).copied()
     }
+
+    /// Write `<worktree>/.claude/settings.local.json` so Claude Code calls back
+    /// into our binary when its lifecycle hooks fire. Idempotent — overwrites
+    /// any existing file we previously wrote.
+    pub fn install_hooks(
+        &self,
+        worktree_path: &std::path::Path,
+        workspace_id: Uuid,
+        tessera_exe: &std::path::Path,
+    ) -> Result<()> {
+        let dir = worktree_path.join(".claude");
+        std::fs::create_dir_all(&dir)?;
+        let exe = tessera_exe.display().to_string();
+        let id = workspace_id;
+        let cmd = |kind: &str| format!("{exe} hook {id} {kind}");
+        let config = serde_json::json!({
+            "hooks": {
+                "Stop": [{
+                    "matcher": "",
+                    "hooks": [{ "type": "command", "command": cmd("stop") }]
+                }],
+                "Notification": [{
+                    "matcher": "",
+                    "hooks": [{ "type": "command", "command": cmd("notify") }]
+                }],
+                "PostToolUse": [{
+                    "matcher": "",
+                    "hooks": [{ "type": "command", "command": cmd("activity") }]
+                }]
+            }
+        });
+        let path = dir.join("settings.local.json");
+        std::fs::write(&path, serde_json::to_string_pretty(&config)?)?;
+        tracing::info!(path = %path.display(), "wrote claude hooks");
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -321,5 +357,27 @@ mod tests {
         assert_eq!(svc.status_of(ws.id), Some(AgentStatus::Working));
         svc.set_status(ws.id, AgentStatus::Done);
         assert_eq!(svc.status_of(ws.id), Some(AgentStatus::Done));
+    }
+
+    #[test]
+    fn install_hooks_writes_settings_file() {
+        let (svc, dir) = make_service();
+        let repo = init_repo(dir.path());
+        let ws = svc.create(&repo, "x", Some("feat/x")).unwrap();
+        let exe = std::path::PathBuf::from("/abs/path/to/tessera");
+        svc.install_hooks(&ws.worktree_path, ws.id, &exe).unwrap();
+        let path = ws.worktree_path.join(".claude/settings.local.json");
+        assert!(path.exists(), "settings.local.json missing");
+        let s = std::fs::read_to_string(&path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert!(parsed["hooks"]["Stop"].is_array());
+        assert!(parsed["hooks"]["Notification"].is_array());
+        assert!(parsed["hooks"]["PostToolUse"].is_array());
+        let stop_cmd = parsed["hooks"]["Stop"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
+        assert!(stop_cmd.contains(&ws.id.to_string()), "got: {stop_cmd}");
+        assert!(stop_cmd.contains("/abs/path/to/tessera"), "got: {stop_cmd}");
+        assert!(stop_cmd.ends_with(" stop"), "got: {stop_cmd}");
     }
 }
