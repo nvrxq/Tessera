@@ -163,7 +163,9 @@ pub fn workspace_spawn_agent(
     state: State<'_, WorkspaceServiceState>,
     workspace_id: Uuid,
 ) -> Result<Uuid, String> {
-    state.spawn_agent(workspace_id, 80, 24).map_err(|e| e.to_string())
+    state
+        .spawn_agent(workspace_id, 80, 24)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

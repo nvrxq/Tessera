@@ -25,6 +25,9 @@ mod tests {
             branch: "feat/login".into(),
             created_at: Utc::now(),
             setup_status: SetupStatus::Pending,
+            task_prompt: String::new(),
+            detected_worktree: None,
+            detected_branch: None,
         };
         let j = serde_json::to_string(&ws).unwrap();
         let back: Workspace = serde_json::from_str(&j).unwrap();

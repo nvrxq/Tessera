@@ -20,7 +20,7 @@ pub fn parse_worktree_add(command: &str) -> Option<WorktreeAdd> {
 
 fn split_compound(command: &str) -> Vec<&str> {
     command
-        .split(|c: char| c == ';' || c == '|')
+        .split([';', '|'])
         .flat_map(|s| s.split("&&"))
         .map(str::trim)
         .filter(|s| !s.is_empty())

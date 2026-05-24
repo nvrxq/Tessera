@@ -245,7 +245,9 @@ mod tests {
         let (svc, dir) = make_service();
         let folder = dir.path().join("any-folder");
         std::fs::create_dir_all(&folder).unwrap();
-        let ws = svc.create(&folder, "Login work", "implement OAuth").unwrap();
+        let ws = svc
+            .create(&folder, "Login work", "implement OAuth")
+            .unwrap();
         assert_eq!(ws.name, "Login work");
         assert_eq!(ws.task_prompt, "implement OAuth");
         assert_eq!(ws.worktree_path, folder);
@@ -355,7 +357,8 @@ mod tests {
         let mut rx = svc.supervisor.subscribe();
 
         // Use `cat` as the "agent": whatever we pipe in echoes back.
-        svc.spawn_agent_with_program(ws.id, "cat", &[], 80, 24).unwrap();
+        svc.spawn_agent_with_program(ws.id, "cat", &[], 80, 24)
+            .unwrap();
 
         let mut buf = Vec::new();
         let start = Instant::now();
@@ -363,9 +366,7 @@ mod tests {
             match rx.try_recv() {
                 Ok(PtyEvent::Data { bytes, .. }) => {
                     buf.extend_from_slice(&bytes);
-                    if std::str::from_utf8(&buf)
-                        .is_ok_and(|s| s.contains("hello from tessera"))
-                    {
+                    if std::str::from_utf8(&buf).is_ok_and(|s| s.contains("hello from tessera")) {
                         return;
                     }
                 }
