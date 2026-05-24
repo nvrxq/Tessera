@@ -10,5 +10,6 @@ bytemuck = { version = "1", features = ["derive"] }
 etagere = "0.3"
 wgpu = "=29.0.3"
 pollster = "=0.3.0"
+swash = "=0.2.7"
 
 [dev-dependencies]
