@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tessera_render::{
     geometry::{Color, Rect},
     glyph_cache::GlyphCache,
-    renderer::{RenderTarget, Renderer},
+    renderer::Renderer,
     resources::Resources,
     scene::{GlyphEntry, RectEntry, Scene},
     DEFAULT_ATLAS_SIZE,
@@ -170,20 +170,13 @@ impl ApplicationHandler for App {
                     x += self.cell.advance_px;
                 }
 
-                // Upload atlas if any new glyphs were rasterized this frame.
-                if self.glyphs.atlas_dirty {
-                    renderer
-                        .glyph
-                        .upload_atlas(&self.res.queue, &self.glyphs.atlas_pixels);
-                    self.glyphs.atlas_dirty = false;
-                }
-
-                renderer.render_to(
+                renderer.render_with_atlas(
                     &self.res.device,
                     &self.res.queue,
                     &scene,
-                    RenderTarget::Surface(&frame),
+                    tessera_render::renderer::RenderTarget::Surface(&frame),
                     [self.size.0 as f32, self.size.1 as f32],
+                    &mut self.glyphs,
                 );
                 frame.present();
 

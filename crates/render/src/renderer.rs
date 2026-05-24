@@ -1,3 +1,4 @@
+use crate::glyph_cache::GlyphCache;
 use crate::pipelines::{glyph::GlyphPipeline, image::ImagePipeline, rect::RectPipeline};
 use crate::scene::Scene;
 
@@ -71,5 +72,21 @@ impl Renderer {
             self.image.draw(&mut pass, image_n);
         }
         queue.submit(Some(enc.finish()));
+    }
+
+    pub fn render_with_atlas(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        scene: &Scene,
+        target: RenderTarget<'_>,
+        screen: [f32; 2],
+        glyph_cache: &mut GlyphCache<'_>,
+    ) {
+        if glyph_cache.atlas_dirty {
+            self.glyph.upload_atlas(queue, &glyph_cache.atlas_pixels);
+            glyph_cache.atlas_dirty = false;
+        }
+        self.render_to(device, queue, scene, target, screen);
     }
 }
