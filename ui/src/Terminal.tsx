@@ -2,22 +2,14 @@ import { onCleanup, onMount } from "solid-js";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import {
-  decodeB64ToBytes,
-  killPty,
-  onPtyEvent,
-  resizePty,
-  spawnShell,
-  writePty,
-} from "./lib/ipc";
+import { decodeB64ToBytes, onPtyEvent, resizePty, writePty } from "./lib/ipc";
 
 export interface TerminalProps {
-  cwd: string;
+  sessionId: string;
 }
 
 export default function Terminal(props: TerminalProps) {
   let host!: HTMLDivElement;
-  let sessionId: string | null = null;
   let unlisten: (() => void) | null = null;
 
   onMount(async () => {
@@ -32,12 +24,11 @@ export default function Terminal(props: TerminalProps) {
     xterm.open(host);
     fit.fit();
 
-    const { cols, rows } = xterm;
-    const resp = await spawnShell(props.cwd, cols, rows);
-    sessionId = resp.session_id;
+    // Push initial size to the PTY so prompts redraw correctly.
+    await resizePty(props.sessionId, xterm.cols, xterm.rows);
 
     unlisten = await onPtyEvent((e) => {
-      if (e.session_id !== sessionId) return;
+      if (e.session_id !== props.sessionId) return;
       if (e.kind === "data") {
         const bytes = decodeB64ToBytes(e.data_b64);
         xterm.write(bytes);
@@ -47,19 +38,18 @@ export default function Terminal(props: TerminalProps) {
     });
 
     xterm.onData((data) => {
-      if (sessionId) void writePty(sessionId, data);
+      void writePty(props.sessionId, data);
     });
 
     const resizeObserver = new ResizeObserver(() => {
       fit.fit();
-      if (sessionId) void resizePty(sessionId, xterm.cols, xterm.rows);
+      void resizePty(props.sessionId, xterm.cols, xterm.rows);
     });
     resizeObserver.observe(host);
 
     onCleanup(() => {
       resizeObserver.disconnect();
       unlisten?.();
-      if (sessionId) void killPty(sessionId);
       xterm.dispose();
     });
   });
