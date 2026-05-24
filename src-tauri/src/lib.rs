@@ -2,7 +2,9 @@ mod commands;
 
 use base64::Engine;
 use std::sync::{Arc, Mutex};
-use tauri::Emitter;
+use tauri::{AppHandle, Emitter};
+use tessera_core::AgentStatus;
+use tessera_hook::{HookEvent, HookKind, Listener};
 use tessera_pty::{PtyEvent, Supervisor};
 use tessera_workspace::WorkspaceService;
 use tracing_subscriber::EnvFilter;
@@ -28,28 +30,50 @@ pub fn run() {
     let workspace_service: Arc<WorkspaceService> =
         Arc::new(WorkspaceService::new(db, supervisor.clone(), worktree_root));
 
+    let socket_path = data_dir.join("hooks.sock");
+
     tauri::Builder::default()
         .manage(supervisor.clone())
-        .manage(workspace_service)
+        .manage(workspace_service.clone())
         .setup(move |app| {
             let handle = app.handle().clone();
-            let mut rx = supervisor.subscribe();
+
+            // PTY event pump (Plan 2).
+            {
+                let handle = handle.clone();
+                let mut rx = supervisor.subscribe();
+                tauri::async_runtime::spawn(async move {
+                    while let Ok(evt) = rx.recv().await {
+                        let payload = match &evt {
+                            PtyEvent::Data { session_id, bytes } => serde_json::json!({
+                                "kind": "data",
+                                "session_id": session_id,
+                                "data_b64": base64::engine::general_purpose::STANDARD.encode(bytes),
+                            }),
+                            PtyEvent::Exit { session_id } => serde_json::json!({
+                                "kind": "exit",
+                                "session_id": session_id,
+                            }),
+                        };
+                        let _ = handle.emit("pty_event", payload);
+                    }
+                });
+            }
+
+            // Hook listener (Plan 4).
+            let svc = workspace_service.clone();
             tauri::async_runtime::spawn(async move {
-                while let Ok(evt) = rx.recv().await {
-                    let payload = match &evt {
-                        PtyEvent::Data { session_id, bytes } => serde_json::json!({
-                            "kind": "data",
-                            "session_id": session_id,
-                            "data_b64": base64::engine::general_purpose::STANDARD.encode(bytes),
-                        }),
-                        PtyEvent::Exit { session_id } => serde_json::json!({
-                            "kind": "exit",
-                            "session_id": session_id,
-                        }),
-                    };
-                    let _ = handle.emit("pty_event", payload);
+                match Listener::bind(&socket_path) {
+                    Ok(mut listener) => {
+                        tracing::info!(path = %listener.socket_path.display(), "hook listener bound");
+                        while let Some(evt) = listener.rx.recv().await {
+                            dispatch_hook(&handle, &svc, evt);
+                        }
+                    }
+                    Err(e) => tracing::error!(error = %e, "hook listener bind failed"),
                 }
             });
+
             tracing::info!("Tessera starting");
             Ok(())
         })
@@ -65,6 +89,20 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+fn dispatch_hook(app: &AppHandle, svc: &Arc<WorkspaceService>, evt: HookEvent) {
+    let new_status = match evt.kind {
+        HookKind::PostToolUse => AgentStatus::Working,
+        HookKind::Stop => AgentStatus::Done,
+        HookKind::Notification => AgentStatus::NeedsInput,
+    };
+    svc.set_status(evt.workspace_id, new_status);
+    let payload = serde_json::json!({
+        "workspace_id": evt.workspace_id,
+        "agent_status": new_status,
+    });
+    let _ = app.emit("workspace_status", payload);
 }
 
 /// CLI-side handler for `tessera hook <workspace_id> <kind>`. Reads stdin
