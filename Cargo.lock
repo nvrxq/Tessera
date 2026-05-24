@@ -3500,16 +3500,19 @@ name = "tessera"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tessera-core",
  "tessera-git",
+ "tessera-pty",
  "tessera-store",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

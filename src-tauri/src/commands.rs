@@ -58,7 +58,9 @@ pub fn pty_resize(
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    state.resize(session_id, cols, rows).map_err(|e| e.to_string())
+    state
+        .resize(session_id, cols, rows)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
