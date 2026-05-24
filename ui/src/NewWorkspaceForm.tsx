@@ -8,18 +8,19 @@ export interface NewWorkspaceFormProps {
 }
 
 const NewWorkspaceForm: Component<NewWorkspaceFormProps> = (props) => {
-  const [repoPath, setRepoPath] = createSignal("");
+  const [name, setName] = createSignal("");
+  const [folderPath, setFolderPath] = createSignal("");
   const [branch, setBranch] = createSignal("");
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
 
   const submit = async (e: Event) => {
     e.preventDefault();
-    if (!repoPath() || !branch()) return;
+    if (!name().trim() || !folderPath().trim()) return;
     setBusy(true);
     setError(null);
     try {
-      const ws = await createWorkspace(repoPath(), branch());
+      const ws = await createWorkspace(folderPath().trim(), name().trim(), branch().trim() || null);
       props.onCreated(ws);
     } catch (err) {
       setError(String(err));
@@ -31,23 +32,33 @@ const NewWorkspaceForm: Component<NewWorkspaceFormProps> = (props) => {
   return (
     <form class="new-workspace" onSubmit={submit}>
       <label>
-        <span>Repo path</span>
+        <span>Name *</span>
         <input
           type="text"
-          placeholder="/home/save/Work/Some/Repo"
-          value={repoPath()}
-          onInput={(e) => setRepoPath(e.currentTarget.value)}
+          placeholder="Login refactor"
+          value={name()}
+          onInput={(e) => setName(e.currentTarget.value)}
+          required
+          autofocus
+        />
+      </label>
+      <label>
+        <span>Folder path *</span>
+        <input
+          type="text"
+          placeholder="/home/save/Work/Some/Folder"
+          value={folderPath()}
+          onInput={(e) => setFolderPath(e.currentTarget.value)}
           required
         />
       </label>
       <label>
-        <span>Branch name</span>
+        <span>Branch name <em>(optional — leave empty to use folder as-is)</em></span>
         <input
           type="text"
-          placeholder="feat/new-thing"
+          placeholder="feat/login"
           value={branch()}
           onInput={(e) => setBranch(e.currentTarget.value)}
-          required
         />
       </label>
       {error() && <p class="form-error">{error()}</p>}

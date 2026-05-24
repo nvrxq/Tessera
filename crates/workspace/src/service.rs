@@ -38,35 +38,56 @@ impl WorkspaceService {
         self.sessions.lock().unwrap().get(&workspace_id).copied()
     }
 
-    pub fn create(&self, repo_path: &std::path::Path, branch_name: &str) -> Result<Workspace> {
+    /// Create a workspace.
+    ///
+    /// - `folder_path` is the source folder. When `branch_name` is set it must
+    ///   be a git repo. When `branch_name` is `None`, any folder is accepted
+    ///   and the folder is used directly as the agent's working dir (no worktree).
+    /// - `name` is a user-supplied label (required, must be non-empty).
+    /// - `branch_name` is optional. When `Some`, a git worktree is created at
+    ///   `worktree_root/<uuid>/` for that branch.
+    pub fn create(
+        &self,
+        folder_path: &std::path::Path,
+        name: &str,
+        branch_name: Option<&str>,
+    ) -> Result<Workspace> {
         use chrono::Utc;
         use tessera_core::SetupStatus;
 
-        std::fs::create_dir_all(&self.worktree_root)?;
-        let id = Uuid::new_v4();
-        let worktree_path = self.worktree_root.join(id.to_string());
+        anyhow::ensure!(!name.trim().is_empty(), "workspace name is required");
 
-        // Create worktree first — if this fails, no row is written.
-        tessera_git::worktree::create(repo_path, &worktree_path, branch_name)?;
+        let id = Uuid::new_v4();
+        let (worktree_path, created_worktree) = match branch_name.filter(|b| !b.is_empty()) {
+            Some(branch) => {
+                std::fs::create_dir_all(&self.worktree_root)?;
+                let wt = self.worktree_root.join(id.to_string());
+                tessera_git::worktree::create(folder_path, &wt, branch)?;
+                (wt, true)
+            }
+            None => (folder_path.to_path_buf(), false),
+        };
 
         let ws = Workspace {
             id,
-            name: branch_name.to_string(),
-            repo_path: repo_path.to_path_buf(),
+            name: name.to_string(),
+            repo_path: folder_path.to_path_buf(),
             worktree_path: worktree_path.clone(),
-            branch: branch_name.to_string(),
+            branch: branch_name.unwrap_or("").to_string(),
             created_at: Utc::now(),
             setup_status: SetupStatus::Ok,
         };
 
         let conn = self.db.lock().unwrap();
         if let Err(e) = tessera_store::workspaces::insert(&conn, &ws) {
-            // Roll back the on-disk worktree.
-            let _ = tessera_git::worktree::delete(repo_path, &worktree_path, true);
+            // Roll back the worktree we just created (if any).
+            if created_worktree {
+                let _ = tessera_git::worktree::delete(folder_path, &worktree_path, true);
+            }
             return Err(e);
         }
 
-        tracing::info!(id = %ws.id, branch = %ws.branch, "workspace created");
+        tracing::info!(id = %ws.id, name = %ws.name, branch = %ws.branch, "workspace created");
         Ok(ws)
     }
 
@@ -113,8 +134,12 @@ impl WorkspaceService {
             let _ = self.supervisor.kill(session_id);
         }
 
-        // Remove the on-disk worktree (force=true ignores dirty state).
-        tessera_git::worktree::delete(&workspace.repo_path, &workspace.worktree_path, force)?;
+        // Only delete the worktree on disk if we created one (branch was set).
+        // If worktree_path == repo_path, the user pointed us at an existing
+        // folder and we should leave it alone.
+        if workspace.worktree_path != workspace.repo_path {
+            tessera_git::worktree::delete(&workspace.repo_path, &workspace.worktree_path, force)?;
+        }
 
         // Delete the DB row last so partial failures still leave something findable.
         let conn = self.db.lock().unwrap();
@@ -172,23 +197,49 @@ mod tests {
     }
 
     #[test]
-    fn create_makes_worktree_and_persists_row() {
+    fn create_with_branch_makes_worktree_and_persists_row() {
         let (svc, dir) = make_service();
         let repo = init_repo(dir.path());
-        let ws = svc.create(&repo, "feat/login").unwrap();
+        let ws = svc.create(&repo, "Login work", Some("feat/login")).unwrap();
+        assert_eq!(ws.name, "Login work");
         assert_eq!(ws.branch, "feat/login");
         assert!(ws.worktree_path.exists());
+        assert_ne!(ws.worktree_path, ws.repo_path);
         let listed = svc.list().unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, ws.id);
     }
 
     #[test]
+    fn create_without_branch_uses_folder_as_worktree() {
+        let (svc, dir) = make_service();
+        let plain_folder = dir.path().join("plain");
+        std::fs::create_dir_all(&plain_folder).unwrap();
+        let ws = svc.create(&plain_folder, "Plain work", None).unwrap();
+        assert_eq!(ws.name, "Plain work");
+        assert_eq!(ws.branch, "");
+        assert_eq!(ws.worktree_path, plain_folder);
+        assert!(
+            plain_folder.exists(),
+            "user folder must NOT be moved or removed"
+        );
+    }
+
+    #[test]
+    fn create_empty_name_errors() {
+        let (svc, dir) = make_service();
+        let repo = init_repo(dir.path());
+        assert!(svc.create(&repo, "", Some("feat/x")).is_err());
+        assert!(svc.create(&repo, "   ", Some("feat/x")).is_err());
+        assert!(svc.list().unwrap().is_empty());
+    }
+
+    #[test]
     fn create_duplicate_branch_errors_and_leaves_no_row() {
         let (svc, dir) = make_service();
         let repo = init_repo(dir.path());
-        svc.create(&repo, "dup").unwrap();
-        let err = svc.create(&repo, "dup").unwrap_err();
+        svc.create(&repo, "first", Some("dup")).unwrap();
+        let err = svc.create(&repo, "second", Some("dup")).unwrap_err();
         let msg = format!("{err}");
         assert!(
             msg.contains("dup") || msg.to_lowercase().contains("ref"),
@@ -202,7 +253,7 @@ mod tests {
     fn spawn_agent_returns_session_id_and_tracks_it() {
         let (svc, dir) = make_service();
         let repo = init_repo(dir.path());
-        let ws = svc.create(&repo, "feat/x").unwrap();
+        let ws = svc.create(&repo, "x", Some("feat/x")).unwrap();
         let sid = svc
             .spawn_agent(ws.id, "bash", &["-c", "echo hi; sleep 0.1"], 80, 24)
             .unwrap();
@@ -210,15 +261,29 @@ mod tests {
     }
 
     #[test]
-    fn delete_removes_row_and_worktree() {
+    fn delete_with_branch_removes_worktree() {
         let (svc, dir) = make_service();
         let repo = init_repo(dir.path());
-        let ws = svc.create(&repo, "feat/x").unwrap();
+        let ws = svc.create(&repo, "x", Some("feat/x")).unwrap();
         let wt_path = ws.worktree_path.clone();
         svc.delete(ws.id, true).unwrap();
         assert!(!wt_path.exists());
         assert!(svc.list().unwrap().is_empty());
         assert_eq!(svc.current_session(ws.id), None);
+    }
+
+    #[test]
+    fn delete_without_branch_leaves_user_folder() {
+        let (svc, dir) = make_service();
+        let plain = dir.path().join("plain");
+        std::fs::create_dir_all(&plain).unwrap();
+        let ws = svc.create(&plain, "Plain", None).unwrap();
+        svc.delete(ws.id, true).unwrap();
+        assert!(
+            plain.exists(),
+            "user folder must NOT be removed on workspace delete"
+        );
+        assert!(svc.list().unwrap().is_empty());
     }
 
     #[test]

@@ -11,9 +11,17 @@ export interface WorkspaceDto {
   session_id: string | null;
 }
 
-export function createWorkspace(repoPath: string, branchName: string): Promise<WorkspaceDto> {
+export function createWorkspace(
+  folderPath: string,
+  name: string,
+  branchName: string | null,
+): Promise<WorkspaceDto> {
   return invoke<WorkspaceDto>("workspace_create", {
-    args: { repo_path: repoPath, branch_name: branchName },
+    args: {
+      folder_path: folderPath,
+      name,
+      branch_name: branchName && branchName.length > 0 ? branchName : null,
+    },
   });
 }
 

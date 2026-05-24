@@ -105,8 +105,11 @@ impl WorkspaceDto {
 
 #[derive(Debug, Deserialize)]
 pub struct CreateWorkspaceArgs {
-    pub repo_path: PathBuf,
-    pub branch_name: String,
+    pub folder_path: PathBuf,
+    pub name: String,
+    /// Optional. Empty / missing means "use the folder as-is, don't create a worktree."
+    #[serde(default)]
+    pub branch_name: Option<String>,
 }
 
 #[tauri::command]
@@ -114,8 +117,9 @@ pub fn workspace_create(
     state: State<'_, WorkspaceServiceState>,
     args: CreateWorkspaceArgs,
 ) -> Result<WorkspaceDto, String> {
+    let branch = args.branch_name.as_deref().filter(|s| !s.is_empty());
     let ws = state
-        .create(&args.repo_path, &args.branch_name)
+        .create(&args.folder_path, &args.name, branch)
         .map_err(|e| e.to_string())?;
     let sid = state
         .spawn_agent(ws.id, "bash", &["-l"], 80, 24)
