@@ -1,0 +1,19 @@
+[package]
+name = "super-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+super-core = { path = "../core" }
+rusqlite = { version = "0.34", features = ["bundled", "chrono", "uuid", "serde_json"] }
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

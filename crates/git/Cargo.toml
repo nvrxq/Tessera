@@ -1,0 +1,15 @@
+[package]
+name = "super-git"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+super-core = { path = "../core" }
+git2 = "0.20"
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
