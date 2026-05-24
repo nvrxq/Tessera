@@ -3633,6 +3633,7 @@ dependencies = [
  "git2",
  "rusqlite",
  "serde",
+ "serde_json",
  "tempfile",
  "tessera-core",
  "tessera-git",
