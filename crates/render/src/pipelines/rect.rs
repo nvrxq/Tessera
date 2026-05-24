@@ -3,7 +3,7 @@ use crate::scene::Scene;
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
-pub struct RectInstance {
+pub(crate) struct RectInstance {
     pos: [f32; 2],
     size: [f32; 2],
     color: [f32; 4],
