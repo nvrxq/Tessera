@@ -4,6 +4,12 @@
   background: #1e1e1e;
   color: #ddd;
 }
-body { margin: 0; }
-main { padding: 2rem; }
-h1 { font-weight: 500; }
+body { margin: 0; height: 100vh; overflow: hidden; }
+#root { height: 100%; display: flex; flex-direction: column; }
+header { padding: 0.75rem 1rem; border-bottom: 1px solid #333; display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+header h1 { margin: 0; font-size: 1.1rem; font-weight: 500; }
+.terminal-host { flex: 1; min-height: 0; padding: 4px; }
+.terminal-host .xterm { height: 100%; }
+.terminal-host .xterm-viewport { background: #1e1e1e !important; }
+button { background: #333; color: #ddd; border: 1px solid #555; padding: 0.25rem 0.75rem; cursor: pointer; }
+button:hover { background: #444; }
