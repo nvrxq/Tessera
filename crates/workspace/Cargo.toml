@@ -6,7 +6,6 @@ license.workspace = true
 
 [dependencies]
 tessera-core = { path = "../core" }
-tessera-git = { path = "../git" }
 tessera-pty = { path = "../pty" }
 tessera-store = { path = "../store" }
 rusqlite = { version = "0.34", features = ["bundled", "chrono", "uuid", "serde_json"] }
@@ -21,5 +20,3 @@ tracing.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-git2 = "0.20"
-serde_json.workspace = true
