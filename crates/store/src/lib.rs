@@ -1,6 +1,7 @@
 //! SQLite-backed persistence for super-linux.
 
 pub mod migrations;
+pub mod workspaces;
 
 use anyhow::Result;
 use rusqlite::Connection;
