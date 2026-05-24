@@ -4,6 +4,7 @@
 
 pub mod atlas;
 pub mod geometry;
+pub mod resources;
 pub mod scene;
 
 pub fn crate_name() -> &'static str {

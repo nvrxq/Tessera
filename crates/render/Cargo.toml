@@ -8,5 +8,7 @@ publish = false
 [dependencies]
 bytemuck = { version = "1", features = ["derive"] }
 etagere = "0.3"
+wgpu = "29"
+pollster = "0.3"
 
 [dev-dependencies]
