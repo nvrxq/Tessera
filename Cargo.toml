@@ -24,3 +24,16 @@ tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tempfile = "3"
+
+# Trim build artifacts: dev keeps fast incremental builds but skips full
+# debuginfo (cuts target/ size ~40-50%); release strips symbols and runs
+# thin LTO for a small, distributable binary.
+[profile.dev]
+debug = "line-tables-only"
+split-debuginfo = "unpacked"
+
+[profile.release]
+strip = "symbols"
+lto = "thin"
+codegen-units = 1
+panic = "abort"

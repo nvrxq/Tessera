@@ -6,3 +6,7 @@
 /src-tauri/gen
 .DS_Store
 *.swp
+# personal dev docs (specs/plans live locally, not in repo)
+/docs
+# local cargo overrides (target dir, custom rustflags)
+/.cargo/config.toml
