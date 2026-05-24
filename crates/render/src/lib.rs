@@ -2,6 +2,7 @@
 //!
 //! See `docs/superpowers/specs/2026-05-24-warp-renderer.md`.
 
+pub mod atlas;
 pub mod geometry;
 pub mod scene;
 
