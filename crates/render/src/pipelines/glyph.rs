@@ -27,7 +27,7 @@ pub struct GlyphPipeline {
     sampler: wgpu::Sampler,
     instance_buffer: wgpu::Buffer,
     instance_capacity: u32,
-    pub atlas_texture: wgpu::Texture,
+    pub(crate) atlas_texture: wgpu::Texture,
     #[allow(dead_code)]
     atlas_view: wgpu::TextureView,
     bind_group: wgpu::BindGroup,
