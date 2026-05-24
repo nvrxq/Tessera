@@ -1,11 +1,32 @@
-import type { Component } from "solid-js";
+import { createSignal, Show, type Component } from "solid-js";
+import Terminal from "./Terminal";
+
+const HOME = "/home/save";
 
 const App: Component = () => {
+  const [open, setOpen] = createSignal(false);
+
   return (
-    <main>
-      <h1>Tessera</h1>
-      <p>Foundation scaffold — no agents yet.</p>
-    </main>
+    <>
+      <header>
+        <h1>Tessera</h1>
+        <Show
+          when={open()}
+          fallback={
+            <button type="button" onClick={() => setOpen(true)}>
+              Spawn shell in {HOME}
+            </button>
+          }
+        >
+          <button type="button" onClick={() => setOpen(false)}>
+            Close terminal
+          </button>
+        </Show>
+      </header>
+      <Show when={open()}>
+        <Terminal cwd={HOME} />
+      </Show>
+    </>
   );
 };
 
