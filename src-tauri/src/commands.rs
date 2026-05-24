@@ -84,7 +84,6 @@ pub struct WorkspaceDto {
     pub worktree_path: PathBuf,
     pub setup_status: SetupStatus,
     pub created_at: DateTime<Utc>,
-    pub task_prompt: String,
     pub detected_worktree: Option<PathBuf>,
     pub detected_branch: Option<String>,
     pub session_id: Option<Uuid>,
@@ -104,7 +103,6 @@ impl WorkspaceDto {
             worktree_path: ws.worktree_path,
             setup_status: ws.setup_status,
             created_at: ws.created_at,
-            task_prompt: ws.task_prompt,
             detected_worktree: ws.detected_worktree,
             detected_branch: ws.detected_branch,
             session_id,
@@ -117,8 +115,6 @@ impl WorkspaceDto {
 pub struct CreateWorkspaceArgs {
     pub folder_path: PathBuf,
     pub name: String,
-    #[serde(default)]
-    pub task_prompt: String,
 }
 
 #[tauri::command]
@@ -127,7 +123,7 @@ pub fn workspace_create(
     args: CreateWorkspaceArgs,
 ) -> Result<WorkspaceDto, String> {
     let ws = state
-        .create(&args.folder_path, &args.name, &args.task_prompt)
+        .create(&args.folder_path, &args.name)
         .map_err(|e| e.to_string())?;
 
     if let Ok(exe) = std::env::current_exe() {

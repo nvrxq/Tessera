@@ -7,11 +7,13 @@ use uuid::Uuid;
 
 pub fn insert(conn: &Connection, ws: &Workspace) -> Result<()> {
     let setup_json = serde_json::to_string(&ws.setup_status)?;
+    // task_prompt column exists from migration 0002 but is unused — relies on
+    // its NOT NULL DEFAULT '' so we can leave it out of the column list.
     conn.execute(
         "INSERT INTO workspaces \
             (id, name, repo_path, worktree_path, branch, created_at, setup_status, \
-             task_prompt, detected_worktree, detected_branch) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+             detected_worktree, detected_branch) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             ws.id.to_string(),
             ws.name,
@@ -20,7 +22,6 @@ pub fn insert(conn: &Connection, ws: &Workspace) -> Result<()> {
             ws.branch,
             ws.created_at.to_rfc3339(),
             setup_json,
-            ws.task_prompt,
             ws.detected_worktree
                 .as_ref()
                 .map(|p| p.to_string_lossy().into_owned()),
@@ -33,7 +34,7 @@ pub fn insert(conn: &Connection, ws: &Workspace) -> Result<()> {
 pub fn get(conn: &Connection, id: Uuid) -> Result<Option<Workspace>> {
     conn.query_row(
         "SELECT id, name, repo_path, worktree_path, branch, created_at, setup_status, \
-                task_prompt, detected_worktree, detected_branch \
+                detected_worktree, detected_branch \
          FROM workspaces WHERE id = ?1",
         params![id.to_string()],
         row_to_workspace,
@@ -45,7 +46,7 @@ pub fn get(conn: &Connection, id: Uuid) -> Result<Option<Workspace>> {
 pub fn list(conn: &Connection) -> Result<Vec<Workspace>> {
     let mut stmt = conn.prepare(
         "SELECT id, name, repo_path, worktree_path, branch, created_at, setup_status, \
-                task_prompt, detected_worktree, detected_branch \
+                detected_worktree, detected_branch \
          FROM workspaces ORDER BY created_at DESC",
     )?;
     let rows = stmt.query_map([], row_to_workspace)?;
@@ -93,8 +94,8 @@ fn row_to_workspace(row: &rusqlite::Row<'_>) -> rusqlite::Result<Workspace> {
     let id_s: String = row.get(0)?;
     let created_s: String = row.get(5)?;
     let setup_s: String = row.get(6)?;
-    let detected_wt: Option<String> = row.get(8)?;
-    let detected_br: Option<String> = row.get(9)?;
+    let detected_wt: Option<String> = row.get(7)?;
+    let detected_br: Option<String> = row.get(8)?;
     Ok(Workspace {
         id: Uuid::parse_str(&id_s).map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
@@ -115,7 +116,6 @@ fn row_to_workspace(row: &rusqlite::Row<'_>) -> rusqlite::Result<Workspace> {
         setup_status: serde_json::from_str(&setup_s).map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(6, rusqlite::types::Type::Text, Box::new(e))
         })?,
-        task_prompt: row.get(7)?,
         detected_worktree: detected_wt.map(PathBuf::from),
         detected_branch: detected_br,
     })
@@ -135,7 +135,6 @@ mod tests {
             branch: name.into(),
             created_at: Utc::now(),
             setup_status: SetupStatus::Pending,
-            task_prompt: String::new(),
             detected_worktree: None,
             detected_branch: None,
         }
@@ -177,18 +176,6 @@ mod tests {
         insert(&conn, &ws).unwrap();
         delete(&conn, ws.id).unwrap();
         assert!(get(&conn, ws.id).unwrap().is_none());
-    }
-
-    #[test]
-    fn task_prompt_round_trips() {
-        let conn = open_in_memory().unwrap();
-        let mut ws = sample("p");
-        ws.task_prompt = "implement OAuth flow".into();
-        insert(&conn, &ws).unwrap();
-        let got = get(&conn, ws.id).unwrap().unwrap();
-        assert_eq!(got.task_prompt, "implement OAuth flow");
-        assert_eq!(got.detected_worktree, None);
-        assert_eq!(got.detected_branch, None);
     }
 
     #[test]

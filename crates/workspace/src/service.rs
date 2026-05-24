@@ -47,12 +47,7 @@ impl WorkspaceService {
     /// Tessera no longer pre-creates a git worktree. `folder_path` is the
     /// folder Claude is launched in. If Claude later runs `git worktree add`,
     /// the hook listener will detect it and update `detected_worktree`.
-    pub fn create(
-        &self,
-        folder_path: &std::path::Path,
-        name: &str,
-        task_prompt: &str,
-    ) -> Result<Workspace> {
+    pub fn create(&self, folder_path: &std::path::Path, name: &str) -> Result<Workspace> {
         use chrono::Utc;
         use tessera_core::SetupStatus;
 
@@ -67,7 +62,6 @@ impl WorkspaceService {
             branch: String::new(),
             created_at: Utc::now(),
             setup_status: SetupStatus::Ok,
-            task_prompt: task_prompt.to_string(),
             detected_worktree: None,
             detected_branch: None,
         };
@@ -100,8 +94,7 @@ impl WorkspaceService {
         Ok(())
     }
 
-    /// Spawn the workspace's agent. Defaults to `claude`. The task_prompt on
-    /// the workspace row (if any) is piped into the PTY shortly after spawn.
+    /// Spawn the workspace's agent. Defaults to `claude`.
     pub fn spawn_agent(&self, workspace_id: Uuid, cols: u16, rows: u16) -> Result<Uuid> {
         self.spawn_agent_with_program(workspace_id, "claude", &[], cols, rows)
     }
@@ -136,20 +129,6 @@ impl WorkspaceService {
             .lock()
             .unwrap()
             .insert(workspace_id, session_id);
-
-        // If the workspace has a task prompt, write it to the PTY a short
-        // moment after spawn so the agent's REPL has time to come up.
-        if !workspace.task_prompt.is_empty() {
-            let supervisor = Arc::clone(&self.supervisor);
-            let prompt = workspace.task_prompt.clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(600));
-                let mut bytes = prompt.into_bytes();
-                bytes.push(b'\n');
-                let _ = supervisor.write(session_id, &bytes);
-            });
-        }
-
         Ok(session_id)
     }
 
@@ -241,15 +220,12 @@ mod tests {
     }
 
     #[test]
-    fn create_inserts_row_with_task_prompt() {
+    fn create_inserts_row() {
         let (svc, dir) = make_service();
         let folder = dir.path().join("any-folder");
         std::fs::create_dir_all(&folder).unwrap();
-        let ws = svc
-            .create(&folder, "Login work", "implement OAuth")
-            .unwrap();
+        let ws = svc.create(&folder, "Login work").unwrap();
         assert_eq!(ws.name, "Login work");
-        assert_eq!(ws.task_prompt, "implement OAuth");
         assert_eq!(ws.worktree_path, folder);
         assert_eq!(ws.branch, "");
         assert_eq!(ws.detected_worktree, None);
@@ -259,8 +235,8 @@ mod tests {
     #[test]
     fn create_empty_name_errors() {
         let (svc, dir) = make_service();
-        assert!(svc.create(dir.path(), "", "task").is_err());
-        assert!(svc.create(dir.path(), "   ", "task").is_err());
+        assert!(svc.create(dir.path(), "").is_err());
+        assert!(svc.create(dir.path(), "   ").is_err());
         assert!(svc.list().unwrap().is_empty());
     }
 
@@ -276,7 +252,7 @@ mod tests {
         let (svc, dir) = make_service();
         let folder = dir.path().join("any-folder");
         std::fs::create_dir_all(&folder).unwrap();
-        let ws = svc.create(&folder, "P", "").unwrap();
+        let ws = svc.create(&folder, "P").unwrap();
         svc.set_status(ws.id, AgentStatus::Working);
         assert_eq!(svc.status_of(ws.id), Some(AgentStatus::Working));
     }
@@ -286,7 +262,7 @@ mod tests {
         let (svc, dir) = make_service();
         let folder = dir.path().join("any-folder");
         std::fs::create_dir_all(&folder).unwrap();
-        let ws = svc.create(&folder, "x", "").unwrap();
+        let ws = svc.create(&folder, "x").unwrap();
         let exe = std::path::PathBuf::from("/abs/path/to/tessera");
         svc.install_hooks(&folder, ws.id, &exe).unwrap();
         let path = folder.join(".claude/settings.local.json");
@@ -306,7 +282,7 @@ mod tests {
         let (svc, dir) = make_service();
         let folder = dir.path().join("any-folder");
         std::fs::create_dir_all(&folder).unwrap();
-        let ws = svc.create(&folder, "x", "").unwrap();
+        let ws = svc.create(&folder, "x").unwrap();
         svc.delete(ws.id, true).unwrap();
         assert!(folder.exists(), "user folder must not be removed");
         assert!(svc.list().unwrap().is_empty());
@@ -324,7 +300,7 @@ mod tests {
         let (svc, dir) = make_service();
         let folder = dir.path().join("any-folder");
         std::fs::create_dir_all(&folder).unwrap();
-        let ws = svc.create(&folder, "x", "task").unwrap();
+        let ws = svc.create(&folder, "x").unwrap();
 
         svc.set_detected_worktree(
             ws.id,
@@ -343,41 +319,14 @@ mod tests {
     }
 
     #[test]
-    fn spawn_agent_pipes_task_prompt_into_pty() {
-        use std::time::{Duration, Instant};
-        use tessera_pty::PtyEvent;
-        use tokio::sync::broadcast::error::TryRecvError;
-
+    fn spawn_agent_with_program_tracks_session() {
         let (svc, dir) = make_service();
         let folder = dir.path().join("any-folder");
         std::fs::create_dir_all(&folder).unwrap();
-        let ws = svc.create(&folder, "x", "hello from tessera").unwrap();
-
-        // Subscribe to PTY broadcast BEFORE spawning so we don't miss bytes.
-        let mut rx = svc.supervisor.subscribe();
-
-        // Use `cat` as the "agent": whatever we pipe in echoes back.
-        svc.spawn_agent_with_program(ws.id, "cat", &[], 80, 24)
+        let ws = svc.create(&folder, "x").unwrap();
+        let sid = svc
+            .spawn_agent_with_program(ws.id, "cat", &[], 80, 24)
             .unwrap();
-
-        let mut buf = Vec::new();
-        let start = Instant::now();
-        while start.elapsed() < Duration::from_secs(3) {
-            match rx.try_recv() {
-                Ok(PtyEvent::Data { bytes, .. }) => {
-                    buf.extend_from_slice(&bytes);
-                    if std::str::from_utf8(&buf).is_ok_and(|s| s.contains("hello from tessera")) {
-                        return;
-                    }
-                }
-                Ok(PtyEvent::Exit { .. }) => break,
-                Err(TryRecvError::Empty) => std::thread::sleep(Duration::from_millis(50)),
-                Err(_) => break,
-            }
-        }
-        panic!(
-            "prompt was not piped; saw: {:?}",
-            String::from_utf8_lossy(&buf)
-        );
+        assert_eq!(svc.current_session(ws.id), Some(sid));
     }
 }

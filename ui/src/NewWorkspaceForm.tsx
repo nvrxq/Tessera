@@ -10,17 +10,16 @@ export interface NewWorkspaceFormProps {
 const NewWorkspaceForm: Component<NewWorkspaceFormProps> = (props) => {
   const [name, setName] = createSignal("");
   const [folderPath, setFolderPath] = createSignal("");
-  const [task, setTask] = createSignal("");
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
 
   const submit = async (e: Event) => {
     e.preventDefault();
-    if (!name().trim() || !folderPath().trim() || !task().trim()) return;
+    if (!name().trim() || !folderPath().trim()) return;
     setBusy(true);
     setError(null);
     try {
-      const ws = await createWorkspace(folderPath().trim(), name().trim(), task().trim());
+      const ws = await createWorkspace(folderPath().trim(), name().trim());
       props.onCreated(ws);
     } catch (err) {
       setError(String(err));
@@ -49,16 +48,6 @@ const NewWorkspaceForm: Component<NewWorkspaceFormProps> = (props) => {
           placeholder="/home/save/Work/Some/Repo"
           value={folderPath()}
           onInput={(e) => setFolderPath(e.currentTarget.value)}
-          required
-        />
-      </label>
-      <label>
-        <span>Task *</span>
-        <textarea
-          rows="6"
-          placeholder="Describe what Claude should do. Claude will be launched in the folder above and this prompt will be sent as its first message."
-          value={task()}
-          onInput={(e) => setTask(e.currentTarget.value)}
           required
         />
       </label>

@@ -25,7 +25,6 @@ mod tests {
             branch: "feat/login".into(),
             created_at: Utc::now(),
             setup_status: SetupStatus::Pending,
-            task_prompt: String::new(),
             detected_worktree: None,
             detected_branch: None,
         };

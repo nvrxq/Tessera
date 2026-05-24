@@ -25,9 +25,7 @@ function subline(ws: WorkspaceDto): string {
     const branch = ws.detected_branch ? ` · ${ws.detected_branch}` : "";
     return `→ ${ws.detected_worktree}${branch}`;
   }
-  return ws.task_prompt
-    ? `“${ws.task_prompt.slice(0, 60)}${ws.task_prompt.length > 60 ? "…" : ""}”`
-    : "(no task)";
+  return ws.repo_path;
 }
 
 const Sidebar: Component<SidebarProps> = (props) => {

@@ -10,7 +10,6 @@ export interface WorkspaceDto {
   worktree_path: string;
   setup_status: { kind: "pending" | "running" | "ok" | "failed"; stderr_tail?: string };
   created_at: string;
-  task_prompt: string;
   detected_worktree: string | null;
   detected_branch: string | null;
   session_id: string | null;
@@ -28,13 +27,9 @@ export interface WorkspaceWorktreeEvent {
   detected_branch: string | null;
 }
 
-export function createWorkspace(
-  folderPath: string,
-  name: string,
-  taskPrompt: string,
-): Promise<WorkspaceDto> {
+export function createWorkspace(folderPath: string, name: string): Promise<WorkspaceDto> {
   return invoke<WorkspaceDto>("workspace_create", {
-    args: { folder_path: folderPath, name, task_prompt: taskPrompt },
+    args: { folder_path: folderPath, name },
   });
 }
 
