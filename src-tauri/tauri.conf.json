@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "super-linux",
+  "productName": "Tessera",
   "version": "0.1.0",
-  "identifier": "sh.superlinux.app",
+  "identifier": "sh.tessera.app",
   "build": {
     "beforeDevCommand": "cd ../ui && bun run dev",
     "beforeBuildCommand": "cd ../ui && bun run build",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "super-linux",
+        "title": "Tessera",
         "width": 1200,
         "height": 800,
         "resizable": true,

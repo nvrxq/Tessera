@@ -1,6 +1,8 @@
-# super-linux
+# Tessera
 
-Linux-first, Rust-based reimplementation of [Superset](https://github.com/superset-sh/superset) — orchestrate parallel CLI coding agents (Claude Code first) across isolated git worktrees.
+Linux-first, Rust-based orchestrator for parallel CLI coding agents (Claude Code first) running in isolated git worktrees. Inspired by [Superset](https://github.com/superset-sh/superset) (macOS-only).
+
+A *tessera* is a single tile of a mosaic — each agent is a piece, together they form the picture.
 
 > Status: foundation scaffold. Worktree + diff + SQLite + Tauri shell are in place. No PTY, no agent integration yet.
 

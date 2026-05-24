@@ -9,7 +9,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .setup(|_app| {
-            tracing::info!("super-linux starting");
+            tracing::info!("Tessera starting");
             Ok(())
         })
         .run(tauri::generate_context!())

@@ -3055,63 +3055,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
-name = "super-core"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "uuid",
-]
-
-[[package]]
-name = "super-git"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "git2",
- "serde",
- "super-core",
- "tempfile",
- "thiserror 2.0.18",
- "tracing",
-]
-
-[[package]]
-name = "super-linux"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "serde",
- "serde_json",
- "super-core",
- "super-git",
- "super-store",
- "tauri",
- "tauri-build",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "super-store"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "rusqlite",
- "serde",
- "serde_json",
- "super-core",
- "tempfile",
- "thiserror 2.0.18",
- "tracing",
- "uuid",
-]
-
-[[package]]
 name = "swift-rs"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3467,6 +3410,63 @@ checksum = "c4790fc369d5a530f4b544b094e31388b9b3a37c0f4652ade4505945f5660d24"
 dependencies = [
  "new_debug_unreachable",
  "utf-8",
+]
+
+[[package]]
+name = "tessera"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tessera-core",
+ "tessera-git",
+ "tessera-store",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "tessera-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
+name = "tessera-git"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "git2",
+ "serde",
+ "tempfile",
+ "tessera-core",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "tessera-store"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tessera-core",
+ "thiserror 2.0.18",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

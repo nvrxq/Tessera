@@ -1,11 +1,11 @@
 [package]
-name = "super-git"
+name = "tessera-git"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-super-core = { path = "../core" }
+tessera-core = { path = "../core" }
 git2 = "0.20"
 anyhow.workspace = true
 thiserror.workspace = true

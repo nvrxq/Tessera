@@ -1,7 +1,7 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
-use super_core::{SetupStatus, Workspace};
+use tessera_core::{SetupStatus, Workspace};
 use uuid::Uuid;
 
 pub fn insert(conn: &Connection, ws: &Workspace) -> Result<()> {

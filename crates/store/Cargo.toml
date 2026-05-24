@@ -1,11 +1,11 @@
 [package]
-name = "super-store"
+name = "tessera-store"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-super-core = { path = "../core" }
+tessera-core = { path = "../core" }
 rusqlite = { version = "0.34", features = ["bundled", "chrono", "uuid", "serde_json"] }
 anyhow.workspace = true
 thiserror.workspace = true

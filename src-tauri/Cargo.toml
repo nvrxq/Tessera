@@ -1,11 +1,11 @@
 [package]
-name = "super-linux"
+name = "tessera"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [lib]
-name = "super_linux_lib"
+name = "tessera_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -13,9 +13,9 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
-super-core = { path = "../crates/core" }
-super-store = { path = "../crates/store" }
-super-git = { path = "../crates/git" }
+tessera-core = { path = "../crates/core" }
+tessera-store = { path = "../crates/store" }
+tessera-git = { path = "../crates/git" }
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true

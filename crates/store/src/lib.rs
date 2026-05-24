@@ -1,4 +1,4 @@
-//! SQLite-backed persistence for super-linux.
+//! SQLite-backed persistence for Tessera.
 
 pub mod migrations;
 pub mod workspaces;
