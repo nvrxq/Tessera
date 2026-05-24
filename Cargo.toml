@@ -4,6 +4,7 @@ members = [
     "crates/core",
     "crates/store",
     "crates/git",
+    "crates/pty",
     "src-tauri",
 ]
 
