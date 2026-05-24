@@ -13,6 +13,8 @@ pub struct WorkspaceService {
     worktree_root: PathBuf,
     /// workspace_id -> live pty session_id (transient, cleared on app restart)
     sessions: Mutex<HashMap<Uuid, Uuid>>,
+    /// workspace_id -> most recent AgentStatus (transient)
+    statuses: Mutex<HashMap<Uuid, tessera_core::AgentStatus>>,
 }
 
 impl WorkspaceService {
@@ -26,6 +28,7 @@ impl WorkspaceService {
             supervisor,
             worktree_root,
             sessions: Mutex::new(HashMap::new()),
+            statuses: Mutex::new(HashMap::new()),
         }
     }
 
@@ -129,10 +132,11 @@ impl WorkspaceService {
                 .ok_or_else(|| anyhow::anyhow!("workspace {workspace_id} not found"))?
         };
 
-        // Kill any live session for this workspace.
+        // Kill any live session for this workspace and forget its status.
         if let Some(session_id) = self.sessions.lock().unwrap().remove(&workspace_id) {
             let _ = self.supervisor.kill(session_id);
         }
+        self.statuses.lock().unwrap().remove(&workspace_id);
 
         // Only delete the worktree on disk if we created one (branch was set).
         // If worktree_path == repo_path, the user pointed us at an existing
@@ -145,6 +149,14 @@ impl WorkspaceService {
         let conn = self.db.lock().unwrap();
         tessera_store::workspaces::delete(&conn, workspace_id)?;
         Ok(())
+    }
+
+    pub fn set_status(&self, workspace_id: Uuid, status: tessera_core::AgentStatus) {
+        self.statuses.lock().unwrap().insert(workspace_id, status);
+    }
+
+    pub fn status_of(&self, workspace_id: Uuid) -> Option<tessera_core::AgentStatus> {
+        self.statuses.lock().unwrap().get(&workspace_id).copied()
     }
 }
 
@@ -290,5 +302,24 @@ mod tests {
     fn delete_unknown_workspace_errors() {
         let (svc, _dir) = make_service();
         assert!(svc.delete(Uuid::new_v4(), true).is_err());
+    }
+
+    #[test]
+    fn status_of_unknown_workspace_is_none() {
+        let (svc, _dir) = make_service();
+        assert!(svc.status_of(Uuid::new_v4()).is_none());
+    }
+
+    #[test]
+    fn set_and_read_status() {
+        use tessera_core::AgentStatus;
+        let (svc, dir) = make_service();
+        let plain = dir.path().join("plain");
+        std::fs::create_dir_all(&plain).unwrap();
+        let ws = svc.create(&plain, "P", None).unwrap();
+        svc.set_status(ws.id, AgentStatus::Working);
+        assert_eq!(svc.status_of(ws.id), Some(AgentStatus::Working));
+        svc.set_status(ws.id, AgentStatus::Done);
+        assert_eq!(svc.status_of(ws.id), Some(AgentStatus::Done));
     }
 }
