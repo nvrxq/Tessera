@@ -21,7 +21,6 @@ pub struct ImageEntry {
     pub rect: Rect,
     pub uv_min: [f32; 2],
     pub uv_max: [f32; 2],
-    pub texture_id: u32,
 }
 
 #[derive(Default, Debug)]
