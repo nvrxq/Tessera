@@ -4,6 +4,7 @@
 
 pub mod atlas;
 pub mod geometry;
+pub mod pipelines;
 pub mod resources;
 pub mod scene;
 
