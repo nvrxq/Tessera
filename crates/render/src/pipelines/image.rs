@@ -26,6 +26,7 @@ pub struct ImagePipeline {
     sampler: wgpu::Sampler,
     instance_buffer: wgpu::Buffer,
     instance_capacity: u32,
+    #[allow(dead_code)]
     pub(crate) texture: wgpu::Texture,
     #[allow(dead_code)]
     view: wgpu::TextureView,
