@@ -1,6 +1,6 @@
 import { For, Show } from "solid-js";
 import type { Component } from "solid-js";
-import type { WorkspaceDto } from "./lib/workspaces";
+import type { AgentStatus, WorkspaceDto } from "./lib/workspaces";
 
 export interface SidebarProps {
   workspaces: WorkspaceDto[];
@@ -8,6 +8,16 @@ export interface SidebarProps {
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
   onNew: () => void;
+}
+
+function statusClass(s: AgentStatus | null): string {
+  if (!s) return "status-dot status-none";
+  return `status-dot status-${s}`;
+}
+
+function statusTitle(s: AgentStatus | null): string {
+  if (!s) return "No status yet";
+  return s.replace("_", " ");
 }
 
 const Sidebar: Component<SidebarProps> = (props) => {
@@ -29,9 +39,10 @@ const Sidebar: Component<SidebarProps> = (props) => {
                 classList={{ selected: ws.id === props.selectedId }}
                 onClick={() => props.onSelect(ws.id)}
               >
+                <span class={statusClass(ws.agent_status)} title={statusTitle(ws.agent_status)} />
                 <div class="workspace-meta">
                   <div class="workspace-name">{ws.name}</div>
-                  <div class="workspace-branch">{ws.branch}</div>
+                  <div class="workspace-branch">{ws.branch || "(no branch)"}</div>
                 </div>
                 <button
                   type="button"

@@ -82,6 +82,22 @@ header h1 { margin: 0; font-size: 0.95rem; font-weight: 500; letter-spacing: 0.0
 .new-workspace label { display: flex; flex-direction: column; gap: 0.25rem; }
 .new-workspace label span { font-size: 0.75rem; color: #888; text-transform: uppercase; letter-spacing: 0.05em; }
 .new-workspace label span em { font-style: normal; text-transform: none; letter-spacing: 0; color: #666; }
+
+.workspace-item { gap: 0.5rem; }
+.status-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #444;
+  box-shadow: 0 0 0 1px #2a2a2a inset;
+}
+.status-none { background: #444; }
+.status-idle { background: #6b6b6b; }
+.status-working { background: #5b8def; box-shadow: 0 0 6px rgba(91, 141, 239, 0.6); }
+.status-needs_input { background: #e6c84c; box-shadow: 0 0 6px rgba(230, 200, 76, 0.6); }
+.status-done { background: #6fc66f; }
+.status-crashed { background: #d96666; }
 .new-workspace input {
   background: #1a1a1a;
   border: 1px solid #333;

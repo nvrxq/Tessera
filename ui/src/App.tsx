@@ -1,10 +1,11 @@
-import { createResource, createSignal, Show, type Component } from "solid-js";
+import { createResource, createSignal, onCleanup, onMount, Show, type Component } from "solid-js";
 import Sidebar from "./Sidebar";
 import NewWorkspaceForm from "./NewWorkspaceForm";
 import Terminal from "./Terminal";
 import {
   deleteWorkspace,
   listWorkspaces,
+  onWorkspaceStatus,
   spawnAgent,
   type WorkspaceDto,
 } from "./lib/workspaces";
@@ -13,6 +14,18 @@ const App: Component = () => {
   const [workspaces, { mutate, refetch }] = createResource<WorkspaceDto[]>(listWorkspaces);
   const [selectedId, setSelectedId] = createSignal<string | null>(null);
   const [showNew, setShowNew] = createSignal(false);
+
+  let unlistenStatus: (() => void) | null = null;
+  onMount(async () => {
+    unlistenStatus = await onWorkspaceStatus((evt) => {
+      mutate((list) =>
+        list?.map((w) =>
+          w.id === evt.workspace_id ? { ...w, agent_status: evt.agent_status } : w,
+        ) ?? list,
+      );
+    });
+  });
+  onCleanup(() => unlistenStatus?.());
 
   const selected = () => workspaces()?.find((w) => w.id === selectedId()) ?? null;
 

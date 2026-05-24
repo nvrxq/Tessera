@@ -1,4 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+
+export type AgentStatus = "idle" | "working" | "needs_input" | "done" | "crashed";
 
 export interface WorkspaceDto {
   id: string;
@@ -9,6 +12,12 @@ export interface WorkspaceDto {
   setup_status: { kind: "pending" | "running" | "ok" | "failed"; stderr_tail?: string };
   created_at: string;
   session_id: string | null;
+  agent_status: AgentStatus | null;
+}
+
+export interface WorkspaceStatusEvent {
+  workspace_id: string;
+  agent_status: AgentStatus;
 }
 
 export function createWorkspace(
@@ -35,4 +44,10 @@ export function spawnAgent(workspaceId: string): Promise<string> {
 
 export function deleteWorkspace(workspaceId: string, force: boolean): Promise<void> {
   return invoke<void>("workspace_delete", { workspaceId, force });
+}
+
+export function onWorkspaceStatus(
+  cb: (e: WorkspaceStatusEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<WorkspaceStatusEvent>("workspace_status", (event) => cb(event.payload));
 }
