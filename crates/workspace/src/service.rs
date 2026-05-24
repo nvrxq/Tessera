@@ -161,6 +161,21 @@ impl WorkspaceService {
         self.statuses.lock().unwrap().get(&workspace_id).copied()
     }
 
+    pub fn set_detected_worktree(
+        &self,
+        workspace_id: Uuid,
+        worktree: Option<std::path::PathBuf>,
+        branch: Option<String>,
+    ) -> Result<()> {
+        let conn = self.db.lock().unwrap();
+        tessera_store::workspaces::update_detected_worktree(
+            &conn,
+            workspace_id,
+            worktree.as_deref(),
+            branch.as_deref(),
+        )
+    }
+
     /// Write `<folder>/.claude/settings.local.json` so Claude Code calls back
     /// into our binary when its lifecycle hooks fire. In Plan 5 this is the
     /// user's source folder (== workspace.worktree_path), not a worktree we
@@ -300,6 +315,29 @@ mod tests {
     fn delete_unknown_workspace_errors() {
         let (svc, _dir) = make_service();
         assert!(svc.delete(Uuid::new_v4(), true).is_err());
+    }
+
+    #[test]
+    fn set_detected_worktree_persists_and_reads_back() {
+        let (svc, dir) = make_service();
+        let folder = dir.path().join("any-folder");
+        std::fs::create_dir_all(&folder).unwrap();
+        let ws = svc.create(&folder, "x", "task").unwrap();
+
+        svc.set_detected_worktree(
+            ws.id,
+            Some(std::path::PathBuf::from("/tmp/wt-x")),
+            Some("feat/x".to_string()),
+        )
+        .unwrap();
+
+        let listed = svc.list().unwrap();
+        let row = listed.iter().find(|w| w.id == ws.id).unwrap();
+        assert_eq!(
+            row.detected_worktree,
+            Some(std::path::PathBuf::from("/tmp/wt-x"))
+        );
+        assert_eq!(row.detected_branch, Some("feat/x".to_string()));
     }
 
     #[test]

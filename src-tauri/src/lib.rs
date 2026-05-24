@@ -98,11 +98,45 @@ fn dispatch_hook(app: &AppHandle, svc: &Arc<WorkspaceService>, evt: HookEvent) {
         HookKind::Notification => AgentStatus::NeedsInput,
     };
     svc.set_status(evt.workspace_id, new_status);
-    let payload = serde_json::json!({
-        "workspace_id": evt.workspace_id,
-        "agent_status": new_status,
-    });
-    let _ = app.emit("workspace_status", payload);
+    let _ = app.emit(
+        "workspace_status",
+        serde_json::json!({
+            "workspace_id": evt.workspace_id,
+            "agent_status": new_status,
+        }),
+    );
+
+    // PostToolUse + Bash + `git worktree add` -> remember the new worktree.
+    if matches!(evt.kind, HookKind::PostToolUse) {
+        let bash_command = evt
+            .payload
+            .get("tool_name")
+            .and_then(|v| v.as_str())
+            .filter(|s| *s == "Bash")
+            .and_then(|_| evt.payload.get("tool_input"))
+            .and_then(|ti| ti.get("command"))
+            .and_then(|c| c.as_str());
+        if let Some(cmd) = bash_command {
+            if let Some(parsed) = tessera_hook::parse_worktree_add(cmd) {
+                let path = std::path::PathBuf::from(&parsed.path);
+                let branch = parsed.branch.clone();
+                if let Err(e) =
+                    svc.set_detected_worktree(evt.workspace_id, Some(path.clone()), branch.clone())
+                {
+                    tracing::warn!(error = %e, "set_detected_worktree failed");
+                } else {
+                    let _ = app.emit(
+                        "workspace_worktree",
+                        serde_json::json!({
+                            "workspace_id": evt.workspace_id,
+                            "detected_worktree": path,
+                            "detected_branch": branch,
+                        }),
+                    );
+                }
+            }
+        }
+    }
 }
 
 /// CLI-side handler for `tessera hook <workspace_id> <kind>`. Reads stdin
