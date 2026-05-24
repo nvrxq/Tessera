@@ -47,7 +47,12 @@ impl WorkspaceService {
     /// Tessera no longer pre-creates a git worktree. `folder_path` is the
     /// folder Claude is launched in. If Claude later runs `git worktree add`,
     /// the hook listener will detect it and update `detected_worktree`.
-    pub fn create(&self, folder_path: &std::path::Path, name: &str) -> Result<Workspace> {
+    pub fn create(
+        &self,
+        folder_path: &std::path::Path,
+        name: &str,
+        dangerous_skip_permissions: bool,
+    ) -> Result<Workspace> {
         use chrono::Utc;
         use tessera_core::SetupStatus;
 
@@ -64,12 +69,18 @@ impl WorkspaceService {
             setup_status: SetupStatus::Ok,
             detected_worktree: None,
             detected_branch: None,
+            dangerous_skip_permissions,
         };
 
         let conn = self.db.lock().unwrap();
         tessera_store::workspaces::insert(&conn, &ws)?;
 
-        tracing::info!(id = %ws.id, name = %ws.name, "workspace created");
+        tracing::info!(
+            id = %ws.id,
+            name = %ws.name,
+            dangerous = ws.dangerous_skip_permissions,
+            "workspace created",
+        );
         Ok(ws)
     }
 
@@ -94,9 +105,20 @@ impl WorkspaceService {
         Ok(())
     }
 
-    /// Spawn the workspace's agent. Defaults to `claude`.
+    /// Spawn the workspace's agent. Defaults to `claude`. If the workspace
+    /// has `dangerous_skip_permissions = true`, passes `--dangerously-skip-permissions`.
     pub fn spawn_agent(&self, workspace_id: Uuid, cols: u16, rows: u16) -> Result<Uuid> {
-        self.spawn_agent_with_program(workspace_id, "claude", &[], cols, rows)
+        let workspace = {
+            let conn = self.db.lock().unwrap();
+            tessera_store::workspaces::get(&conn, workspace_id)?
+                .ok_or_else(|| anyhow::anyhow!("workspace {workspace_id} not found"))?
+        };
+        let args: &[&str] = if workspace.dangerous_skip_permissions {
+            &["--dangerously-skip-permissions"]
+        } else {
+            &[]
+        };
+        self.spawn_agent_with_program(workspace_id, "claude", args, cols, rows)
     }
 
     /// Like `spawn_agent` but lets callers pick the program — used by tests to
@@ -224,7 +246,7 @@ mod tests {
         let (svc, dir) = make_service();
         let folder = dir.path().join("any-folder");
         std::fs::create_dir_all(&folder).unwrap();
-        let ws = svc.create(&folder, "Login work").unwrap();
+        let ws = svc.create(&folder, "Login work", false).unwrap();
         assert_eq!(ws.name, "Login work");
         assert_eq!(ws.worktree_path, folder);
         assert_eq!(ws.branch, "");
@@ -235,8 +257,8 @@ mod tests {
     #[test]
     fn create_empty_name_errors() {
         let (svc, dir) = make_service();
-        assert!(svc.create(dir.path(), "").is_err());
-        assert!(svc.create(dir.path(), "   ").is_err());
+        assert!(svc.create(dir.path(), "", false).is_err());
+        assert!(svc.create(dir.path(), "   ", false).is_err());
         assert!(svc.list().unwrap().is_empty());
     }
 
@@ -252,7 +274,7 @@ mod tests {
         let (svc, dir) = make_service();
         let folder = dir.path().join("any-folder");
         std::fs::create_dir_all(&folder).unwrap();
-        let ws = svc.create(&folder, "P").unwrap();
+        let ws = svc.create(&folder, "P", false).unwrap();
         svc.set_status(ws.id, AgentStatus::Working);
         assert_eq!(svc.status_of(ws.id), Some(AgentStatus::Working));
     }
@@ -262,7 +284,7 @@ mod tests {
         let (svc, dir) = make_service();
         let folder = dir.path().join("any-folder");
         std::fs::create_dir_all(&folder).unwrap();
-        let ws = svc.create(&folder, "x").unwrap();
+        let ws = svc.create(&folder, "x", false).unwrap();
         let exe = std::path::PathBuf::from("/abs/path/to/tessera");
         svc.install_hooks(&folder, ws.id, &exe).unwrap();
         let path = folder.join(".claude/settings.local.json");
@@ -282,7 +304,7 @@ mod tests {
         let (svc, dir) = make_service();
         let folder = dir.path().join("any-folder");
         std::fs::create_dir_all(&folder).unwrap();
-        let ws = svc.create(&folder, "x").unwrap();
+        let ws = svc.create(&folder, "x", false).unwrap();
         svc.delete(ws.id, true).unwrap();
         assert!(folder.exists(), "user folder must not be removed");
         assert!(svc.list().unwrap().is_empty());
@@ -300,7 +322,7 @@ mod tests {
         let (svc, dir) = make_service();
         let folder = dir.path().join("any-folder");
         std::fs::create_dir_all(&folder).unwrap();
-        let ws = svc.create(&folder, "x").unwrap();
+        let ws = svc.create(&folder, "x", false).unwrap();
 
         svc.set_detected_worktree(
             ws.id,
@@ -323,7 +345,7 @@ mod tests {
         let (svc, dir) = make_service();
         let folder = dir.path().join("any-folder");
         std::fs::create_dir_all(&folder).unwrap();
-        let ws = svc.create(&folder, "x").unwrap();
+        let ws = svc.create(&folder, "x", false).unwrap();
         let sid = svc
             .spawn_agent_with_program(ws.id, "cat", &[], 80, 24)
             .unwrap();

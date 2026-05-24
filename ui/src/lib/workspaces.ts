@@ -12,6 +12,7 @@ export interface WorkspaceDto {
   created_at: string;
   detected_worktree: string | null;
   detected_branch: string | null;
+  dangerous_skip_permissions: boolean;
   session_id: string | null;
   agent_status: AgentStatus | null;
 }
@@ -27,9 +28,17 @@ export interface WorkspaceWorktreeEvent {
   detected_branch: string | null;
 }
 
-export function createWorkspace(folderPath: string, name: string): Promise<WorkspaceDto> {
+export function createWorkspace(
+  folderPath: string,
+  name: string,
+  dangerousSkipPermissions: boolean,
+): Promise<WorkspaceDto> {
   return invoke<WorkspaceDto>("workspace_create", {
-    args: { folder_path: folderPath, name },
+    args: {
+      folder_path: folderPath,
+      name,
+      dangerous_skip_permissions: dangerousSkipPermissions,
+    },
   });
 }
 
@@ -53,4 +62,21 @@ export function onWorkspaceWorktree(
   cb: (e: WorkspaceWorktreeEvent) => void,
 ): Promise<UnlistenFn> {
   return listen<WorkspaceWorktreeEvent>("workspace_worktree", (event) => cb(event.payload));
+}
+
+export function statusLabel(s: AgentStatus | null): string {
+  switch (s) {
+    case "working":
+      return "Working";
+    case "needs_input":
+      return "Needs input";
+    case "done":
+      return "Done";
+    case "crashed":
+      return "Crashed";
+    case "idle":
+      return "Idle";
+    default:
+      return "Ready";
+  }
 }

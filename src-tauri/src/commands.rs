@@ -86,6 +86,7 @@ pub struct WorkspaceDto {
     pub created_at: DateTime<Utc>,
     pub detected_worktree: Option<PathBuf>,
     pub detected_branch: Option<String>,
+    pub dangerous_skip_permissions: bool,
     pub session_id: Option<Uuid>,
     pub agent_status: Option<tessera_core::AgentStatus>,
 }
@@ -105,6 +106,7 @@ impl WorkspaceDto {
             created_at: ws.created_at,
             detected_worktree: ws.detected_worktree,
             detected_branch: ws.detected_branch,
+            dangerous_skip_permissions: ws.dangerous_skip_permissions,
             session_id,
             agent_status,
         }
@@ -115,6 +117,8 @@ impl WorkspaceDto {
 pub struct CreateWorkspaceArgs {
     pub folder_path: PathBuf,
     pub name: String,
+    #[serde(default)]
+    pub dangerous_skip_permissions: bool,
 }
 
 #[tauri::command]
@@ -123,7 +127,11 @@ pub fn workspace_create(
     args: CreateWorkspaceArgs,
 ) -> Result<WorkspaceDto, String> {
     let ws = state
-        .create(&args.folder_path, &args.name)
+        .create(
+            &args.folder_path,
+            &args.name,
+            args.dangerous_skip_permissions,
+        )
         .map_err(|e| e.to_string())?;
 
     if let Ok(exe) = std::env::current_exe() {

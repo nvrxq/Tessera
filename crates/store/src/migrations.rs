@@ -16,6 +16,10 @@ const MIGRATIONS: &[Migration] = &[
         version: 2,
         sql: include_str!("../migrations/0002_task_slot.sql"),
     },
+    Migration {
+        version: 3,
+        sql: include_str!("../migrations/0003_dangerous_flag.sql"),
+    },
 ];
 
 pub fn apply(conn: &Connection) -> Result<()> {

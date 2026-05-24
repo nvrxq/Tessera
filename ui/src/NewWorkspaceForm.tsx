@@ -10,6 +10,7 @@ export interface NewWorkspaceFormProps {
 const NewWorkspaceForm: Component<NewWorkspaceFormProps> = (props) => {
   const [name, setName] = createSignal("");
   const [folderPath, setFolderPath] = createSignal("");
+  const [dangerous, setDangerous] = createSignal(false);
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
 
@@ -19,7 +20,7 @@ const NewWorkspaceForm: Component<NewWorkspaceFormProps> = (props) => {
     setBusy(true);
     setError(null);
     try {
-      const ws = await createWorkspace(folderPath().trim(), name().trim());
+      const ws = await createWorkspace(folderPath().trim(), name().trim(), dangerous());
       props.onCreated(ws);
     } catch (err) {
       setError(String(err));
@@ -50,6 +51,21 @@ const NewWorkspaceForm: Component<NewWorkspaceFormProps> = (props) => {
           onInput={(e) => setFolderPath(e.currentTarget.value)}
           required
         />
+      </label>
+      <label class="checkbox-row">
+        <input
+          type="checkbox"
+          checked={dangerous()}
+          onChange={(e) => setDangerous(e.currentTarget.checked)}
+        />
+        <div class="checkbox-meta">
+          <span class="checkbox-title">
+            Run with <code>--dangerously-skip-permissions</code>
+          </span>
+          <span class="checkbox-hint">
+            Claude won't prompt for tool permissions. Use only in trusted folders.
+          </span>
+        </div>
       </label>
       {error() && <p class="form-error">{error()}</p>}
       <div class="form-actions">

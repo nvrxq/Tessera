@@ -7,13 +7,11 @@ use uuid::Uuid;
 
 pub fn insert(conn: &Connection, ws: &Workspace) -> Result<()> {
     let setup_json = serde_json::to_string(&ws.setup_status)?;
-    // task_prompt column exists from migration 0002 but is unused — relies on
-    // its NOT NULL DEFAULT '' so we can leave it out of the column list.
     conn.execute(
         "INSERT INTO workspaces \
             (id, name, repo_path, worktree_path, branch, created_at, setup_status, \
-             detected_worktree, detected_branch) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+             detected_worktree, detected_branch, dangerous_skip_permissions) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             ws.id.to_string(),
             ws.name,
@@ -26,6 +24,7 @@ pub fn insert(conn: &Connection, ws: &Workspace) -> Result<()> {
                 .as_ref()
                 .map(|p| p.to_string_lossy().into_owned()),
             ws.detected_branch,
+            ws.dangerous_skip_permissions as i64,
         ],
     )?;
     Ok(())
@@ -34,7 +33,7 @@ pub fn insert(conn: &Connection, ws: &Workspace) -> Result<()> {
 pub fn get(conn: &Connection, id: Uuid) -> Result<Option<Workspace>> {
     conn.query_row(
         "SELECT id, name, repo_path, worktree_path, branch, created_at, setup_status, \
-                detected_worktree, detected_branch \
+                detected_worktree, detected_branch, dangerous_skip_permissions \
          FROM workspaces WHERE id = ?1",
         params![id.to_string()],
         row_to_workspace,
@@ -46,7 +45,7 @@ pub fn get(conn: &Connection, id: Uuid) -> Result<Option<Workspace>> {
 pub fn list(conn: &Connection) -> Result<Vec<Workspace>> {
     let mut stmt = conn.prepare(
         "SELECT id, name, repo_path, worktree_path, branch, created_at, setup_status, \
-                detected_worktree, detected_branch \
+                detected_worktree, detected_branch, dangerous_skip_permissions \
          FROM workspaces ORDER BY created_at DESC",
     )?;
     let rows = stmt.query_map([], row_to_workspace)?;
@@ -96,6 +95,7 @@ fn row_to_workspace(row: &rusqlite::Row<'_>) -> rusqlite::Result<Workspace> {
     let setup_s: String = row.get(6)?;
     let detected_wt: Option<String> = row.get(7)?;
     let detected_br: Option<String> = row.get(8)?;
+    let dangerous: i64 = row.get(9)?;
     Ok(Workspace {
         id: Uuid::parse_str(&id_s).map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
@@ -118,6 +118,7 @@ fn row_to_workspace(row: &rusqlite::Row<'_>) -> rusqlite::Result<Workspace> {
         })?,
         detected_worktree: detected_wt.map(PathBuf::from),
         detected_branch: detected_br,
+        dangerous_skip_permissions: dangerous != 0,
     })
 }
 
@@ -137,6 +138,7 @@ mod tests {
             setup_status: SetupStatus::Pending,
             detected_worktree: None,
             detected_branch: None,
+            dangerous_skip_permissions: false,
         }
     }
 
@@ -193,5 +195,15 @@ mod tests {
         let got = get(&conn, ws.id).unwrap().unwrap();
         assert_eq!(got.detected_worktree, Some(PathBuf::from("/tmp/wt-x")));
         assert_eq!(got.detected_branch, Some("feat/x".to_string()));
+    }
+
+    #[test]
+    fn dangerous_flag_round_trips() {
+        let conn = open_in_memory().unwrap();
+        let mut ws = sample("d");
+        ws.dangerous_skip_permissions = true;
+        insert(&conn, &ws).unwrap();
+        let got = get(&conn, ws.id).unwrap().unwrap();
+        assert!(got.dangerous_skip_permissions);
     }
 }

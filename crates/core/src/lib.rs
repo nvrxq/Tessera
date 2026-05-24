@@ -27,6 +27,7 @@ mod tests {
             setup_status: SetupStatus::Pending,
             detected_worktree: None,
             detected_branch: None,
+            dangerous_skip_permissions: false,
         };
         let j = serde_json::to_string(&ws).unwrap();
         let back: Workspace = serde_json::from_str(&j).unwrap();

@@ -30,8 +30,11 @@
 
   /* —— motion —— */
   --ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
   --t-micro: 120ms;
   --t-short: 180ms;
+  --t-medium: 280ms;
 
   font-family: var(--font-ui);
   font-feature-settings: "ss01", "cv11";
@@ -74,6 +77,11 @@ header h1 {
 }
 header h1 .t-accent {
   color: var(--accent);
+  display: inline-block;
+  transition: transform var(--t-medium) var(--ease-spring);
+}
+header h1:hover .t-accent {
+  transform: translateY(-1px) rotate(-3deg);
 }
 
 /* —— layout —— */
@@ -116,12 +124,16 @@ header h1 .t-accent {
 }
 .workspace-item {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
   cursor: pointer;
   border-left: 2px solid transparent;
-  transition: background var(--t-micro) var(--ease-enter);
+  position: relative;
+  animation: row-enter var(--t-medium) var(--ease-out) both;
+  transition:
+    background var(--t-short) var(--ease-out),
+    border-left-color var(--t-short) var(--ease-out);
 }
 .workspace-item:hover {
   background: var(--surface-hover);
@@ -130,10 +142,21 @@ header h1 .t-accent {
   background: var(--surface-selected);
   border-left-color: var(--accent);
 }
+.workspace-item.selected::before {
+  content: "";
+  position: absolute;
+  left: -2px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 8px rgba(200, 130, 91, 0.5);
+  animation: accent-glow var(--t-medium) var(--ease-out) both;
+}
 .workspace-meta {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 4px;
   min-width: 0;
   flex: 1;
 }
@@ -141,9 +164,28 @@ header h1 .t-accent {
   font-size: 13px;
   font-weight: 500;
   color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+}
+.workspace-name-text {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
+}
+.dangerous-badge {
+  color: var(--needs-input);
+  font-size: 11px;
+  line-height: 1;
+  filter: drop-shadow(0 0 4px rgba(230, 200, 76, 0.4));
+}
+.workspace-substack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
 .workspace-branch {
   font-family: var(--font-mono);
@@ -163,15 +205,41 @@ header h1 .t-accent {
   padding: 2px 6px;
   border-radius: 4px;
   opacity: 0;
-  transition: opacity var(--t-micro) var(--ease-enter), color var(--t-micro);
+  transform: scale(0.8);
+  transition:
+    opacity var(--t-short) var(--ease-out),
+    transform var(--t-short) var(--ease-spring),
+    color var(--t-micro),
+    background var(--t-micro);
 }
 .workspace-item:hover .workspace-delete {
   opacity: 1;
+  transform: scale(1);
 }
 .workspace-delete:hover {
   color: var(--crashed);
   background: var(--surface-hover);
 }
+
+/* —— status text labels (inline next to the dot) —— */
+.status-label {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  font-family: var(--font-mono);
+  transition: color var(--t-medium) var(--ease-out);
+}
+.status-label-none { color: var(--text-disabled); }
+.status-label-idle { color: var(--idle); }
+.status-label-working {
+  color: var(--working);
+}
+.status-label-needs_input {
+  color: var(--needs-input);
+  animation: label-attention 2.2s ease-in-out infinite;
+}
+.status-label-done { color: var(--success); }
+.status-label-crashed { color: var(--crashed); }
 
 /* —— main pane —— */
 .main-pane {
@@ -187,6 +255,7 @@ header h1 .t-accent {
   flex: 1;
   min-height: 0;
   padding: 8px;
+  animation: pane-fade-in var(--t-medium) var(--ease-out) both;
 }
 .terminal-host .xterm {
   height: 100%;
@@ -205,6 +274,7 @@ header h1 .t-accent {
   gap: 20px;
   color: var(--text-muted);
   font-size: 13px;
+  animation: pane-fade-in var(--t-medium) var(--ease-out) both;
 }
 .empty-mosaic {
   width: 96px;
@@ -213,21 +283,33 @@ header h1 .t-accent {
   grid-template-columns: repeat(3, 1fr);
   grid-template-rows: repeat(3, 1fr);
   gap: 4px;
-  opacity: 0.5;
+  opacity: 0.85;
 }
 .empty-mosaic span {
   border-radius: 3px;
   background: var(--accent);
+  animation: tile-enter 700ms var(--ease-spring) both;
+  transform-origin: center;
 }
-.empty-mosaic span:nth-child(1) { opacity: 0.10; transform: rotate(-2deg); }
-.empty-mosaic span:nth-child(2) { opacity: 0.18; transform: rotate(1deg); }
-.empty-mosaic span:nth-child(3) { opacity: 0.08; transform: rotate(-1deg); }
-.empty-mosaic span:nth-child(4) { opacity: 0.22; transform: rotate(2deg); }
-.empty-mosaic span:nth-child(5) { opacity: 0.30; transform: rotate(-3deg); }
-.empty-mosaic span:nth-child(6) { opacity: 0.14; transform: rotate(1deg); }
-.empty-mosaic span:nth-child(7) { opacity: 0.06; transform: rotate(-1deg); }
-.empty-mosaic span:nth-child(8) { opacity: 0.16; transform: rotate(2deg); }
-.empty-mosaic span:nth-child(9) { opacity: 0.10; transform: rotate(-2deg); }
+.empty-mosaic span:nth-child(1) { opacity: 0.10; animation-delay: 0ms;   --rot: -2deg; }
+.empty-mosaic span:nth-child(2) { opacity: 0.18; animation-delay: 60ms;  --rot: 1deg; }
+.empty-mosaic span:nth-child(3) { opacity: 0.08; animation-delay: 120ms; --rot: -1deg; }
+.empty-mosaic span:nth-child(4) { opacity: 0.22; animation-delay: 80ms;  --rot: 2deg; }
+.empty-mosaic span:nth-child(5) { opacity: 0.32; animation-delay: 140ms; --rot: -3deg; }
+.empty-mosaic span:nth-child(6) { opacity: 0.14; animation-delay: 200ms; --rot: 1deg; }
+.empty-mosaic span:nth-child(7) { opacity: 0.06; animation-delay: 160ms; --rot: -1deg; }
+.empty-mosaic span:nth-child(8) { opacity: 0.18; animation-delay: 220ms; --rot: 2deg; }
+.empty-mosaic span:nth-child(9) { opacity: 0.12; animation-delay: 280ms; --rot: -2deg; }
+@keyframes tile-enter {
+  0% {
+    opacity: 0;
+    transform: scale(0.4) rotate(var(--rot));
+  }
+  100% {
+    opacity: var(--final-opacity, 0.20);
+    transform: scale(1) rotate(var(--rot));
+  }
+}
 
 /* —— new workspace form —— */
 .new-workspace {
@@ -235,28 +317,29 @@ header h1 .t-accent {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  max-width: 480px;
+  max-width: 520px;
+  animation: pane-fade-in var(--t-medium) var(--ease-out) both;
 }
 .new-workspace label {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
-.new-workspace label span {
+.new-workspace label > span {
   font-size: 11px;
   font-weight: 500;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-muted);
 }
-.new-workspace label span em {
+.new-workspace label > span em {
   font-style: normal;
   text-transform: none;
   letter-spacing: 0;
   color: var(--text-disabled);
   font-weight: 400;
 }
-.new-workspace input,
+.new-workspace input[type="text"],
 .new-workspace textarea {
   background: var(--surface-elevated);
   border: 1px solid var(--border-subtle);
@@ -266,16 +349,93 @@ header h1 .t-accent {
   font-size: 13px;
   border-radius: 4px;
   outline: none;
-  transition: border-color var(--t-micro) var(--ease-enter);
+  transition:
+    border-color var(--t-short) var(--ease-out),
+    box-shadow var(--t-short) var(--ease-out);
 }
-.new-workspace input:focus,
+.new-workspace input[type="text"]:focus,
 .new-workspace textarea:focus {
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(200, 130, 91, 0.15);
 }
 .new-workspace textarea {
   resize: vertical;
   min-height: 96px;
 }
+
+.checkbox-row {
+  flex-direction: row !important;
+  gap: 10px !important;
+  align-items: flex-start;
+  padding: 10px 12px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color var(--t-short) var(--ease-out);
+}
+.checkbox-row:hover {
+  border-color: var(--border-strong);
+}
+.checkbox-row input[type="checkbox"] {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--surface);
+  cursor: pointer;
+  position: relative;
+  margin-top: 1px;
+  transition:
+    background var(--t-short) var(--ease-out),
+    border-color var(--t-short) var(--ease-out);
+}
+.checkbox-row input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.checkbox-row input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  left: 4.5px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--bg);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+  animation: check-pop var(--t-short) var(--ease-spring);
+}
+.checkbox-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.checkbox-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  letter-spacing: normal !important;
+  text-transform: none !important;
+}
+.checkbox-title code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--surface);
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: var(--needs-input);
+}
+.checkbox-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: normal !important;
+  text-transform: none !important;
+  font-weight: 400 !important;
+}
+
 .form-actions {
   display: flex;
   gap: 8px;
@@ -288,6 +448,7 @@ header h1 .t-accent {
   margin: 0;
   white-space: pre-wrap;
   font-family: var(--font-mono);
+  animation: shake 280ms ease-in-out;
 }
 
 /* —— buttons —— */
@@ -301,11 +462,17 @@ button {
   font-size: 13px;
   font-weight: 500;
   border-radius: 6px;
-  transition: background var(--t-micro) var(--ease-enter), border-color var(--t-micro);
+  transition:
+    background var(--t-micro) var(--ease-out),
+    border-color var(--t-micro) var(--ease-out),
+    transform var(--t-micro) var(--ease-out);
 }
 button:hover:not(:disabled) {
   background: var(--surface-hover);
   border-color: var(--border-strong);
+}
+button:active:not(:disabled) {
+  transform: scale(0.97);
 }
 button:disabled {
   opacity: 0.45;
@@ -315,10 +482,12 @@ button[type="submit"] {
   background: var(--accent);
   color: var(--bg);
   border-color: var(--accent);
+  box-shadow: 0 0 0 0 rgba(200, 130, 91, 0);
 }
 button[type="submit"]:hover:not(:disabled) {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
+  box-shadow: 0 0 16px rgba(200, 130, 91, 0.25);
 }
 .sidebar-head button {
   padding: 2px 8px;
@@ -332,6 +501,7 @@ button[type="submit"]:hover:not(:disabled) {
   background: var(--surface-hover);
   border-color: var(--border-subtle);
   color: var(--text-primary);
+  transform: rotate(90deg);
 }
 
 /* —— status dots —— */
@@ -339,31 +509,31 @@ button[type="submit"]:hover:not(:disabled) {
   flex-shrink: 0;
   width: 8px;
   height: 8px;
+  margin-top: 5px;
   border-radius: 50%;
   background: var(--idle);
   box-shadow: 0 0 0 1px var(--surface-elevated) inset;
+  transition: background var(--t-medium) var(--ease-out), box-shadow var(--t-medium) var(--ease-out);
 }
 .status-none { background: var(--idle); opacity: 0.5; }
 .status-idle { background: var(--idle); }
 .status-working {
   background: var(--working);
-  box-shadow: 0 0 8px rgba(91, 141, 239, 0.55);
+  box-shadow: 0 0 10px rgba(91, 141, 239, 0.6);
   animation: dot-breathe 1.6s ease-in-out infinite;
 }
 .status-needs_input {
   background: var(--needs-input);
-  box-shadow: 0 0 8px rgba(230, 200, 76, 0.55);
+  box-shadow: 0 0 10px rgba(230, 200, 76, 0.6);
+  animation: dot-attention 2.2s ease-in-out infinite;
 }
 .status-done {
   background: var(--success);
+  box-shadow: 0 0 8px rgba(127, 189, 127, 0.3);
 }
 .status-crashed {
   background: var(--crashed);
-}
-
-@keyframes dot-breathe {
-  0%, 100% { opacity: 1; box-shadow: 0 0 8px rgba(91, 141, 239, 0.55); }
-  50% { opacity: 0.55; box-shadow: 0 0 0 rgba(91, 141, 239, 0); }
+  box-shadow: 0 0 8px rgba(217, 102, 102, 0.4);
 }
 
 /* —— scrollbars (subtle, terminal-app style) —— */
@@ -371,3 +541,82 @@ button[type="submit"]:hover:not(:disabled) {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border-subtle); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+
+/* —— keyframes —— */
+@keyframes row-enter {
+  0% {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+@keyframes accent-glow {
+  0% {
+    opacity: 0;
+    transform: scaleY(0.4);
+  }
+  100% {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+}
+@keyframes dot-breathe {
+  0%, 100% {
+    opacity: 1;
+    box-shadow: 0 0 10px rgba(91, 141, 239, 0.6);
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    box-shadow: 0 0 0 rgba(91, 141, 239, 0);
+    transform: scale(0.9);
+  }
+}
+@keyframes dot-attention {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 10px rgba(230, 200, 76, 0.6);
+  }
+  50% {
+    transform: scale(1.18);
+    box-shadow: 0 0 18px rgba(230, 200, 76, 0.85);
+  }
+}
+@keyframes label-attention {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+@keyframes pane-fade-in {
+  0% {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes check-pop {
+  0% { transform: rotate(45deg) scale(0); }
+  60% { transform: rotate(45deg) scale(1.2); }
+  100% { transform: rotate(45deg) scale(1); }
+}
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-4px); }
+  40% { transform: translateX(4px); }
+  60% { transform: translateX(-2px); }
+  80% { transform: translateX(2px); }
+}
+
+/* Respect reduced-motion preference */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

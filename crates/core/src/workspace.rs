@@ -23,4 +23,5 @@ pub struct Workspace {
     pub setup_status: SetupStatus,
     pub detected_worktree: Option<PathBuf>,
     pub detected_branch: Option<String>,
+    pub dangerous_skip_permissions: bool,
 }
