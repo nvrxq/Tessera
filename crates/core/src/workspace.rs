@@ -21,4 +21,7 @@ pub struct Workspace {
     pub branch: String,
     pub created_at: DateTime<Utc>,
     pub setup_status: SetupStatus,
+    pub task_prompt: String,
+    pub detected_worktree: Option<PathBuf>,
+    pub detected_branch: Option<String>,
 }

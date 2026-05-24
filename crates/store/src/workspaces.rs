@@ -1,14 +1,17 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
+use std::path::PathBuf;
 use tessera_core::{SetupStatus, Workspace};
 use uuid::Uuid;
 
 pub fn insert(conn: &Connection, ws: &Workspace) -> Result<()> {
     let setup_json = serde_json::to_string(&ws.setup_status)?;
     conn.execute(
-        "INSERT INTO workspaces (id, name, repo_path, worktree_path, branch, created_at, setup_status) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO workspaces \
+            (id, name, repo_path, worktree_path, branch, created_at, setup_status, \
+             task_prompt, detected_worktree, detected_branch) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             ws.id.to_string(),
             ws.name,
@@ -17,6 +20,11 @@ pub fn insert(conn: &Connection, ws: &Workspace) -> Result<()> {
             ws.branch,
             ws.created_at.to_rfc3339(),
             setup_json,
+            ws.task_prompt,
+            ws.detected_worktree
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned()),
+            ws.detected_branch,
         ],
     )?;
     Ok(())
@@ -24,7 +32,8 @@ pub fn insert(conn: &Connection, ws: &Workspace) -> Result<()> {
 
 pub fn get(conn: &Connection, id: Uuid) -> Result<Option<Workspace>> {
     conn.query_row(
-        "SELECT id, name, repo_path, worktree_path, branch, created_at, setup_status \
+        "SELECT id, name, repo_path, worktree_path, branch, created_at, setup_status, \
+                task_prompt, detected_worktree, detected_branch \
          FROM workspaces WHERE id = ?1",
         params![id.to_string()],
         row_to_workspace,
@@ -35,7 +44,8 @@ pub fn get(conn: &Connection, id: Uuid) -> Result<Option<Workspace>> {
 
 pub fn list(conn: &Connection) -> Result<Vec<Workspace>> {
     let mut stmt = conn.prepare(
-        "SELECT id, name, repo_path, worktree_path, branch, created_at, setup_status \
+        "SELECT id, name, repo_path, worktree_path, branch, created_at, setup_status, \
+                task_prompt, detected_worktree, detected_branch \
          FROM workspaces ORDER BY created_at DESC",
     )?;
     let rows = stmt.query_map([], row_to_workspace)?;
@@ -47,6 +57,24 @@ pub fn update_setup_status(conn: &Connection, id: Uuid, status: &SetupStatus) ->
     let n = conn.execute(
         "UPDATE workspaces SET setup_status = ?1 WHERE id = ?2",
         params![j, id.to_string()],
+    )?;
+    anyhow::ensure!(n == 1, "workspace {id} not found");
+    Ok(())
+}
+
+pub fn update_detected_worktree(
+    conn: &Connection,
+    id: Uuid,
+    worktree: Option<&std::path::Path>,
+    branch: Option<&str>,
+) -> Result<()> {
+    let n = conn.execute(
+        "UPDATE workspaces SET detected_worktree = ?1, detected_branch = ?2 WHERE id = ?3",
+        params![
+            worktree.map(|p| p.to_string_lossy().into_owned()),
+            branch,
+            id.to_string()
+        ],
     )?;
     anyhow::ensure!(n == 1, "workspace {id} not found");
     Ok(())
@@ -65,13 +93,15 @@ fn row_to_workspace(row: &rusqlite::Row<'_>) -> rusqlite::Result<Workspace> {
     let id_s: String = row.get(0)?;
     let created_s: String = row.get(5)?;
     let setup_s: String = row.get(6)?;
+    let detected_wt: Option<String> = row.get(8)?;
+    let detected_br: Option<String> = row.get(9)?;
     Ok(Workspace {
         id: Uuid::parse_str(&id_s).map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
         })?,
         name: row.get(1)?,
-        repo_path: std::path::PathBuf::from(row.get::<_, String>(2)?),
-        worktree_path: std::path::PathBuf::from(row.get::<_, String>(3)?),
+        repo_path: PathBuf::from(row.get::<_, String>(2)?),
+        worktree_path: PathBuf::from(row.get::<_, String>(3)?),
         branch: row.get(4)?,
         created_at: DateTime::parse_from_rfc3339(&created_s)
             .map_err(|e| {
@@ -85,6 +115,9 @@ fn row_to_workspace(row: &rusqlite::Row<'_>) -> rusqlite::Result<Workspace> {
         setup_status: serde_json::from_str(&setup_s).map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(6, rusqlite::types::Type::Text, Box::new(e))
         })?,
+        task_prompt: row.get(7)?,
+        detected_worktree: detected_wt.map(PathBuf::from),
+        detected_branch: detected_br,
     })
 }
 
@@ -92,7 +125,6 @@ fn row_to_workspace(row: &rusqlite::Row<'_>) -> rusqlite::Result<Workspace> {
 mod tests {
     use super::*;
     use crate::open_in_memory;
-    use std::path::PathBuf;
 
     fn sample(name: &str) -> Workspace {
         Workspace {
@@ -103,6 +135,9 @@ mod tests {
             branch: name.into(),
             created_at: Utc::now(),
             setup_status: SetupStatus::Pending,
+            task_prompt: String::new(),
+            detected_worktree: None,
+            detected_branch: None,
         }
     }
 
@@ -142,5 +177,34 @@ mod tests {
         insert(&conn, &ws).unwrap();
         delete(&conn, ws.id).unwrap();
         assert!(get(&conn, ws.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn task_prompt_round_trips() {
+        let conn = open_in_memory().unwrap();
+        let mut ws = sample("p");
+        ws.task_prompt = "implement OAuth flow".into();
+        insert(&conn, &ws).unwrap();
+        let got = get(&conn, ws.id).unwrap().unwrap();
+        assert_eq!(got.task_prompt, "implement OAuth flow");
+        assert_eq!(got.detected_worktree, None);
+        assert_eq!(got.detected_branch, None);
+    }
+
+    #[test]
+    fn update_detected_worktree_persists() {
+        let conn = open_in_memory().unwrap();
+        let ws = sample("p");
+        insert(&conn, &ws).unwrap();
+        update_detected_worktree(
+            &conn,
+            ws.id,
+            Some(&PathBuf::from("/tmp/wt-x")),
+            Some("feat/x"),
+        )
+        .unwrap();
+        let got = get(&conn, ws.id).unwrap().unwrap();
+        assert_eq!(got.detected_worktree, Some(PathBuf::from("/tmp/wt-x")));
+        assert_eq!(got.detected_branch, Some("feat/x".to_string()));
     }
 }

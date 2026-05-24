@@ -7,10 +7,16 @@ struct Migration {
     sql: &'static str,
 }
 
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    sql: include_str!("../migrations/0001_init.sql"),
-}];
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        sql: include_str!("../migrations/0001_init.sql"),
+    },
+    Migration {
+        version: 2,
+        sql: include_str!("../migrations/0002_task_slot.sql"),
+    },
+];
 
 pub fn apply(conn: &Connection) -> Result<()> {
     conn.execute_batch(
