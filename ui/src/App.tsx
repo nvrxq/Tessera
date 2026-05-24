@@ -6,6 +6,7 @@ import {
   deleteWorkspace,
   listWorkspaces,
   onWorkspaceStatus,
+  onWorkspaceWorktree,
   spawnAgent,
   type WorkspaceDto,
 } from "./lib/workspaces";
@@ -16,6 +17,7 @@ const App: Component = () => {
   const [showNew, setShowNew] = createSignal(false);
 
   let unlistenStatus: (() => void) | null = null;
+  let unlistenWorktree: (() => void) | null = null;
   onMount(async () => {
     unlistenStatus = await onWorkspaceStatus((evt) => {
       mutate((list) =>
@@ -24,8 +26,24 @@ const App: Component = () => {
         ) ?? list,
       );
     });
+    unlistenWorktree = await onWorkspaceWorktree((evt) => {
+      mutate((list) =>
+        list?.map((w) =>
+          w.id === evt.workspace_id
+            ? {
+                ...w,
+                detected_worktree: evt.detected_worktree,
+                detected_branch: evt.detected_branch,
+              }
+            : w,
+        ) ?? list,
+      );
+    });
   });
-  onCleanup(() => unlistenStatus?.());
+  onCleanup(() => {
+    unlistenStatus?.();
+    unlistenWorktree?.();
+  });
 
   const selected = () => workspaces()?.find((w) => w.id === selectedId()) ?? null;
 
@@ -33,7 +51,6 @@ const App: Component = () => {
     setSelectedId(id);
     const ws = workspaces()?.find((w) => w.id === id);
     if (ws && ws.session_id == null) {
-      // Restart agent if it had died (e.g., after app restart).
       const sid = await spawnAgent(id);
       mutate((list) =>
         list?.map((w) => (w.id === id ? { ...w, session_id: sid } : w)) ?? list,

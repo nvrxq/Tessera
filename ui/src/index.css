@@ -98,13 +98,18 @@ header h1 { margin: 0; font-size: 0.95rem; font-weight: 500; letter-spacing: 0.0
 .status-needs_input { background: #e6c84c; box-shadow: 0 0 6px rgba(230, 200, 76, 0.6); }
 .status-done { background: #6fc66f; }
 .status-crashed { background: #d96666; }
-.new-workspace input {
+.new-workspace input,
+.new-workspace textarea {
   background: #1a1a1a;
   border: 1px solid #333;
   color: #ddd;
   padding: 0.4rem 0.5rem;
   font-family: ui-monospace, monospace;
   font-size: 0.85rem;
+}
+.new-workspace textarea {
+  resize: vertical;
+  min-height: 6rem;
 }
 .form-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
 .form-error { color: #d96666; font-size: 0.85rem; margin: 0; white-space: pre-wrap; }

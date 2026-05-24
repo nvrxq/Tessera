@@ -20,6 +20,16 @@ function statusTitle(s: AgentStatus | null): string {
   return s.replace("_", " ");
 }
 
+function subline(ws: WorkspaceDto): string {
+  if (ws.detected_worktree) {
+    const branch = ws.detected_branch ? ` · ${ws.detected_branch}` : "";
+    return `→ ${ws.detected_worktree}${branch}`;
+  }
+  return ws.task_prompt
+    ? `“${ws.task_prompt.slice(0, 60)}${ws.task_prompt.length > 60 ? "…" : ""}”`
+    : "(no task)";
+}
+
 const Sidebar: Component<SidebarProps> = (props) => {
   return (
     <aside class="sidebar">
@@ -42,7 +52,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
                 <span class={statusClass(ws.agent_status)} title={statusTitle(ws.agent_status)} />
                 <div class="workspace-meta">
                   <div class="workspace-name">{ws.name}</div>
-                  <div class="workspace-branch">{ws.branch || "(no branch)"}</div>
+                  <div class="workspace-branch">{subline(ws)}</div>
                 </div>
                 <button
                   type="button"
@@ -50,7 +60,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
                   title="Delete workspace"
                   onClick={(e) => {
                     e.stopPropagation();
-                    if (confirm(`Delete workspace "${ws.name}"? Worktree will be removed.`)) {
+                    if (confirm(`Delete workspace "${ws.name}"? The DB row is removed; on-disk files are left alone.`)) {
                       props.onDelete(ws.id);
                     }
                   }}

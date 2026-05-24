@@ -6,11 +6,13 @@ export type AgentStatus = "idle" | "working" | "needs_input" | "done" | "crashed
 export interface WorkspaceDto {
   id: string;
   name: string;
-  branch: string;
   repo_path: string;
   worktree_path: string;
   setup_status: { kind: "pending" | "running" | "ok" | "failed"; stderr_tail?: string };
   created_at: string;
+  task_prompt: string;
+  detected_worktree: string | null;
+  detected_branch: string | null;
   session_id: string | null;
   agent_status: AgentStatus | null;
 }
@@ -20,17 +22,19 @@ export interface WorkspaceStatusEvent {
   agent_status: AgentStatus;
 }
 
+export interface WorkspaceWorktreeEvent {
+  workspace_id: string;
+  detected_worktree: string;
+  detected_branch: string | null;
+}
+
 export function createWorkspace(
   folderPath: string,
   name: string,
-  branchName: string | null,
+  taskPrompt: string,
 ): Promise<WorkspaceDto> {
   return invoke<WorkspaceDto>("workspace_create", {
-    args: {
-      folder_path: folderPath,
-      name,
-      branch_name: branchName && branchName.length > 0 ? branchName : null,
-    },
+    args: { folder_path: folderPath, name, task_prompt: taskPrompt },
   });
 }
 
@@ -46,8 +50,12 @@ export function deleteWorkspace(workspaceId: string, force: boolean): Promise<vo
   return invoke<void>("workspace_delete", { workspaceId, force });
 }
 
-export function onWorkspaceStatus(
-  cb: (e: WorkspaceStatusEvent) => void,
-): Promise<UnlistenFn> {
+export function onWorkspaceStatus(cb: (e: WorkspaceStatusEvent) => void): Promise<UnlistenFn> {
   return listen<WorkspaceStatusEvent>("workspace_status", (event) => cb(event.payload));
+}
+
+export function onWorkspaceWorktree(
+  cb: (e: WorkspaceWorktreeEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<WorkspaceWorktreeEvent>("workspace_worktree", (event) => cb(event.payload));
 }
