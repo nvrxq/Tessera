@@ -1,9 +1,10 @@
 mod commands;
 
 use base64::Engine;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tauri::Emitter;
 use tessera_pty::{PtyEvent, Supervisor};
+use tessera_workspace::WorkspaceService;
 use tracing_subscriber::EnvFilter;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -13,10 +14,26 @@ pub fn run() {
         .with_target(false)
         .init();
 
+    let data_dir = dirs::data_local_dir()
+        .expect("no XDG data dir")
+        .join("tessera");
+    std::fs::create_dir_all(&data_dir).expect("could not create data dir");
+    let db_path = data_dir.join("state.db");
+    let conn = tessera_store::open(&db_path).expect("could not open store");
+    let db = Arc::new(Mutex::new(conn));
+
     let supervisor: Arc<Supervisor> = Arc::new(Supervisor::new());
+
+    let worktree_root = data_dir.join("worktrees");
+    let workspace_service: Arc<WorkspaceService> = Arc::new(WorkspaceService::new(
+        db,
+        supervisor.clone(),
+        worktree_root,
+    ));
 
     tauri::Builder::default()
         .manage(supervisor.clone())
+        .manage(workspace_service)
         .setup(move |app| {
             let handle = app.handle().clone();
             let mut rx = supervisor.subscribe();
@@ -44,6 +61,10 @@ pub fn run() {
             commands::pty_write,
             commands::pty_resize,
             commands::pty_kill,
+            commands::workspace_create,
+            commands::workspace_list,
+            commands::workspace_spawn_agent,
+            commands::workspace_delete,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
