@@ -1,5 +1,8 @@
 use etagere::{AtlasAllocator, size2};
 
+/// Default size of the glyph atlas in pixels (square). Matches the warp-renderer spec §6.3.
+pub const DEFAULT_ATLAS_SIZE: u32 = 2048;
+
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct AllocatedRegion {
     pub id: etagere::AllocId,

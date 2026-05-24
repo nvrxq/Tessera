@@ -3,6 +3,7 @@
 //! See `docs/superpowers/specs/2026-05-24-warp-renderer.md`.
 
 pub mod atlas;
+pub use atlas::DEFAULT_ATLAS_SIZE;
 pub mod geometry;
 pub mod glyph_cache;
 pub mod pipelines;

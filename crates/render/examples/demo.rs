@@ -6,6 +6,7 @@ use tessera_render::{
     renderer::{RenderTarget, Renderer},
     resources::Resources,
     scene::{GlyphEntry, RectEntry, Scene},
+    DEFAULT_ATLAS_SIZE,
 };
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
@@ -29,7 +30,7 @@ struct App {
 impl App {
     fn new() -> Self {
         let res = Resources::new_headless().expect("GPU adapter required for demo");
-        let glyphs = GlyphCache::new(FONT, 1024).expect("font");
+        let glyphs = GlyphCache::new(FONT, DEFAULT_ATLAS_SIZE).expect("font");
         let cell = glyphs.cell_metrics(26.0);
         Self {
             window: None,
@@ -84,7 +85,7 @@ impl ApplicationHandler for App {
         );
 
         self.surface_format = format;
-        self.renderer = Some(Renderer::new(&self.res.device, format, 1024));
+        self.renderer = Some(Renderer::new(&self.res.device, format, DEFAULT_ATLAS_SIZE));
         self.surface = Some(surface);
         self.window = Some(window);
     }

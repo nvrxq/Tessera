@@ -10,6 +10,7 @@ use tessera_render::{
     renderer::{Renderer, RenderTarget},
     resources::Resources,
     scene::{GlyphEntry, RectEntry, Scene},
+    DEFAULT_ATLAS_SIZE,
 };
 
 const FONT: &[u8] = include_bytes!("../assets/GeistMono-Regular.ttf");
@@ -36,8 +37,8 @@ fn frame_time_budget() {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         view_formats: &[],
     });
-    let mut renderer = Renderer::new(&res.device, format, 2048);
-    let mut cache = GlyphCache::new(FONT, 2048).unwrap();
+    let mut renderer = Renderer::new(&res.device, format, DEFAULT_ATLAS_SIZE);
+    let mut cache = GlyphCache::new(FONT, DEFAULT_ATLAS_SIZE).unwrap();
     let cell = cache.cell_metrics(13.0);
 
     // Pre-rasterize printable ASCII so warm-up doesn't pollute timings.
