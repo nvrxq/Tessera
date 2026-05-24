@@ -78,7 +78,9 @@ const App: Component = () => {
   return (
     <>
       <header>
-        <h1>Tessera</h1>
+        <h1>
+          <span class="t-accent">T</span>essera
+        </h1>
       </header>
       <div class="layout">
         <Sidebar
@@ -96,7 +98,12 @@ const App: Component = () => {
             {(sid) => <Terminal sessionId={sid} />}
           </Show>
           <Show when={!showNew() && !selected()}>
-            <div class="empty-state">Select a workspace or create a new one.</div>
+            <div class="empty-state">
+              <div class="empty-mosaic" aria-hidden="true">
+                <span /><span /><span /><span /><span /><span /><span /><span /><span />
+              </div>
+              <div>Select a workspace or create a new one.</div>
+            </div>
           </Show>
         </main>
       </div>

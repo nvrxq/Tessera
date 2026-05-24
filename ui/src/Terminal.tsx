@@ -14,9 +14,9 @@ export default function Terminal(props: TerminalProps) {
 
   onMount(async () => {
     const xterm = new XTerm({
-      fontFamily: "ui-monospace, Menlo, monospace",
+      fontFamily: '"Geist Mono", ui-monospace, "JetBrains Mono", Menlo, monospace',
       fontSize: 13,
-      theme: { background: "#1e1e1e", foreground: "#ddd" },
+      theme: { background: "#141415", foreground: "#E8E8E6" },
       convertEol: true,
     });
     const fit = new FitAddon();
