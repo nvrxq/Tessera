@@ -32,6 +32,7 @@ impl From<wgpu::RequestDeviceError> for ResourcesError {
     }
 }
 
+#[derive(Debug)]
 pub struct Resources {
     pub instance: wgpu::Instance,
     pub adapter: wgpu::Adapter,
