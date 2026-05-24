@@ -66,3 +66,40 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+/// CLI-side handler for `tessera hook <workspace_id> <kind>`. Reads stdin
+/// (whatever Claude wrote), wraps it as a HookEvent, and sends to the socket.
+/// Exits 0 silently on any failure — must not break the agent's session.
+pub fn run_hook(workspace_id: &str, kind: &str) -> i32 {
+    use std::io::Read;
+    use tessera_hook::{send_event, HookEvent, HookKind};
+    use uuid::Uuid;
+
+    let ws_id = match Uuid::parse_str(workspace_id) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let Some(parsed_kind) = HookKind::from_cli(kind) else {
+        return 0;
+    };
+
+    let mut buf = String::new();
+    let _ = std::io::stdin().read_to_string(&mut buf);
+    let payload =
+        serde_json::from_str::<serde_json::Value>(buf.trim()).unwrap_or(serde_json::Value::Null);
+
+    let Some(data_dir) = dirs::data_local_dir() else {
+        return 0;
+    };
+    let sock = data_dir.join("tessera").join("hooks.sock");
+
+    let _ = send_event(
+        &sock,
+        &HookEvent {
+            workspace_id: ws_id,
+            kind: parsed_kind,
+            payload,
+        },
+    );
+    0
+}
