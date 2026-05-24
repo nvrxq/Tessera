@@ -1,0 +1,22 @@
+[package]
+name = "tessera-workspace"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tessera-core = { path = "../core" }
+tessera-git = { path = "../git" }
+tessera-pty = { path = "../pty" }
+tessera-store = { path = "../store" }
+rusqlite = { version = "0.34", features = ["bundled", "chrono", "uuid", "serde_json"] }
+dirs = "5"
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

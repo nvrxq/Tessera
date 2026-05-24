@@ -5,6 +5,7 @@ members = [
     "crates/store",
     "crates/git",
     "crates/pty",
+    "crates/workspace",
     "src-tauri",
 ]
 
