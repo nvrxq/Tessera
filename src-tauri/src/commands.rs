@@ -80,11 +80,13 @@ pub type WorkspaceServiceState = Arc<WorkspaceService>;
 pub struct WorkspaceDto {
     pub id: Uuid,
     pub name: String,
-    pub branch: String,
     pub repo_path: PathBuf,
     pub worktree_path: PathBuf,
     pub setup_status: SetupStatus,
     pub created_at: DateTime<Utc>,
+    pub task_prompt: String,
+    pub detected_worktree: Option<PathBuf>,
+    pub detected_branch: Option<String>,
     pub session_id: Option<Uuid>,
     pub agent_status: Option<tessera_core::AgentStatus>,
 }
@@ -98,11 +100,13 @@ impl WorkspaceDto {
         Self {
             id: ws.id,
             name: ws.name,
-            branch: ws.branch,
             repo_path: ws.repo_path,
             worktree_path: ws.worktree_path,
             setup_status: ws.setup_status,
             created_at: ws.created_at,
+            task_prompt: ws.task_prompt,
+            detected_worktree: ws.detected_worktree,
+            detected_branch: ws.detected_branch,
             session_id,
             agent_status,
         }
@@ -113,9 +117,8 @@ impl WorkspaceDto {
 pub struct CreateWorkspaceArgs {
     pub folder_path: PathBuf,
     pub name: String,
-    /// Optional. Empty / missing means "use the folder as-is, don't create a worktree."
     #[serde(default)]
-    pub branch_name: Option<String>,
+    pub task_prompt: String,
 }
 
 #[tauri::command]
@@ -123,14 +126,10 @@ pub fn workspace_create(
     state: State<'_, WorkspaceServiceState>,
     args: CreateWorkspaceArgs,
 ) -> Result<WorkspaceDto, String> {
-    let branch = args.branch_name.as_deref().filter(|s| !s.is_empty());
     let ws = state
-        .create(&args.folder_path, &args.name, branch)
+        .create(&args.folder_path, &args.name, &args.task_prompt)
         .map_err(|e| e.to_string())?;
 
-    // Best-effort: install Claude Code hooks so the agent can call back.
-    // We don't fail workspace creation if hook installation fails — the
-    // agent still runs.
     if let Ok(exe) = std::env::current_exe() {
         if let Err(e) = state.install_hooks(&ws.worktree_path, ws.id, &exe) {
             tracing::warn!(error = %e, "install_hooks failed");
@@ -138,7 +137,7 @@ pub fn workspace_create(
     }
 
     let sid = state
-        .spawn_agent(ws.id, "bash", &["-l"], 80, 24)
+        .spawn_agent(ws.id, 80, 24)
         .map_err(|e| e.to_string())?;
     let status = state.status_of(ws.id);
     Ok(WorkspaceDto::from_workspace(ws, Some(sid), status))
@@ -164,9 +163,7 @@ pub fn workspace_spawn_agent(
     state: State<'_, WorkspaceServiceState>,
     workspace_id: Uuid,
 ) -> Result<Uuid, String> {
-    state
-        .spawn_agent(workspace_id, "bash", &["-l"], 80, 24)
-        .map_err(|e| e.to_string())
+    state.spawn_agent(workspace_id, 80, 24).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
