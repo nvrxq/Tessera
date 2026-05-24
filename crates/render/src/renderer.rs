@@ -38,6 +38,9 @@ impl Renderer {
             RenderTarget::Surface(s) => s.texture.create_view(&Default::default()),
         };
 
+        // --bg #0F0F10 in linear; reuses Color::to_linear so it stays in sync with the design system.
+        let bg = crate::geometry::Color::rgb(15, 15, 16).to_linear();
+
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("frame"),
         });
@@ -50,9 +53,9 @@ impl Renderer {
                     depth_slice: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.06,
-                            g: 0.06,
-                            b: 0.06,
+                            r: bg[0] as f64,
+                            g: bg[1] as f64,
+                            b: bg[2] as f64,
                             a: 1.0,
                         }),
                         store: wgpu::StoreOp::Store,
