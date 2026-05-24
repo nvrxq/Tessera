@@ -4,7 +4,7 @@ members = [
     "crates/core",
     "crates/store",
     "crates/git",
-    # "src-tauri" — added in Task 8
+    "src-tauri",
 ]
 
 [workspace.package]
