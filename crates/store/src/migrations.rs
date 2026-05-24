@@ -21,7 +21,11 @@ pub fn apply(conn: &Connection) -> Result<()> {
     )?;
 
     let current: i64 = conn
-        .query_row("SELECT COALESCE(MAX(version), 0) FROM schema_version", [], |r| r.get(0))
+        .query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_version",
+            [],
+            |r| r.get(0),
+        )
         .unwrap_or(0);
 
     for m in MIGRATIONS {

@@ -59,7 +59,8 @@ pub fn diff_against_base(
                     if matches!(origin, '+' | '-' | ' ') {
                         last.patch.push(origin);
                     }
-                    last.patch.push_str(&String::from_utf8_lossy(line.content()));
+                    last.patch
+                        .push_str(&String::from_utf8_lossy(line.content()));
                 }
                 true
             }),
@@ -111,6 +112,8 @@ mod tests {
             .unwrap();
 
         let diffs = diff_against_base(fx.dir.path(), &wt, &base).unwrap();
-        assert!(diffs.iter().any(|d| d.path == std::path::PathBuf::from("README.md")));
+        assert!(diffs
+            .iter()
+            .any(|d| d.path == std::path::PathBuf::from("README.md")));
     }
 }

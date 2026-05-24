@@ -53,7 +53,10 @@ pub fn update_setup_status(conn: &Connection, id: Uuid, status: &SetupStatus) ->
 }
 
 pub fn delete(conn: &Connection, id: Uuid) -> Result<()> {
-    let n = conn.execute("DELETE FROM workspaces WHERE id = ?1", params![id.to_string()])?;
+    let n = conn.execute(
+        "DELETE FROM workspaces WHERE id = ?1",
+        params![id.to_string()],
+    )?;
     anyhow::ensure!(n == 1, "workspace {id} not found");
     Ok(())
 }
