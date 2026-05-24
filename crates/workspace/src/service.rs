@@ -100,6 +100,59 @@ impl WorkspaceService {
         Ok(())
     }
 
+    /// Spawn the workspace's agent. Defaults to `claude`. The task_prompt on
+    /// the workspace row (if any) is piped into the PTY shortly after spawn.
+    pub fn spawn_agent(&self, workspace_id: Uuid, cols: u16, rows: u16) -> Result<Uuid> {
+        self.spawn_agent_with_program(workspace_id, "claude", &[], cols, rows)
+    }
+
+    /// Like `spawn_agent` but lets callers pick the program — used by tests to
+    /// substitute `cat` for `claude`.
+    pub fn spawn_agent_with_program(
+        &self,
+        workspace_id: Uuid,
+        program: &str,
+        args: &[&str],
+        cols: u16,
+        rows: u16,
+    ) -> Result<Uuid> {
+        use tessera_pty::session::SessionConfig;
+
+        let workspace = {
+            let conn = self.db.lock().unwrap();
+            tessera_store::workspaces::get(&conn, workspace_id)?
+                .ok_or_else(|| anyhow::anyhow!("workspace {workspace_id} not found"))?
+        };
+
+        let cfg = SessionConfig {
+            program: program.to_string(),
+            args: args.iter().map(|s| s.to_string()).collect(),
+            cwd: workspace.worktree_path.clone(),
+            cols,
+            rows,
+        };
+        let session_id = self.supervisor.spawn(cfg)?;
+        self.sessions
+            .lock()
+            .unwrap()
+            .insert(workspace_id, session_id);
+
+        // If the workspace has a task prompt, write it to the PTY a short
+        // moment after spawn so the agent's REPL has time to come up.
+        if !workspace.task_prompt.is_empty() {
+            let supervisor = Arc::clone(&self.supervisor);
+            let prompt = workspace.task_prompt.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(600));
+                let mut bytes = prompt.into_bytes();
+                bytes.push(b'\n');
+                let _ = supervisor.write(session_id, &bytes);
+            });
+        }
+
+        Ok(session_id)
+    }
+
     pub fn set_status(&self, workspace_id: Uuid, status: tessera_core::AgentStatus) {
         self.statuses.lock().unwrap().insert(workspace_id, status);
     }
@@ -247,5 +300,45 @@ mod tests {
     fn delete_unknown_workspace_errors() {
         let (svc, _dir) = make_service();
         assert!(svc.delete(Uuid::new_v4(), true).is_err());
+    }
+
+    #[test]
+    fn spawn_agent_pipes_task_prompt_into_pty() {
+        use std::time::{Duration, Instant};
+        use tessera_pty::PtyEvent;
+        use tokio::sync::broadcast::error::TryRecvError;
+
+        let (svc, dir) = make_service();
+        let folder = dir.path().join("any-folder");
+        std::fs::create_dir_all(&folder).unwrap();
+        let ws = svc.create(&folder, "x", "hello from tessera").unwrap();
+
+        // Subscribe to PTY broadcast BEFORE spawning so we don't miss bytes.
+        let mut rx = svc.supervisor.subscribe();
+
+        // Use `cat` as the "agent": whatever we pipe in echoes back.
+        svc.spawn_agent_with_program(ws.id, "cat", &[], 80, 24).unwrap();
+
+        let mut buf = Vec::new();
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(3) {
+            match rx.try_recv() {
+                Ok(PtyEvent::Data { bytes, .. }) => {
+                    buf.extend_from_slice(&bytes);
+                    if std::str::from_utf8(&buf)
+                        .is_ok_and(|s| s.contains("hello from tessera"))
+                    {
+                        return;
+                    }
+                }
+                Ok(PtyEvent::Exit { .. }) => break,
+                Err(TryRecvError::Empty) => std::thread::sleep(Duration::from_millis(50)),
+                Err(_) => break,
+            }
+        }
+        panic!(
+            "prompt was not piped; saw: {:?}",
+            String::from_utf8_lossy(&buf)
+        );
     }
 }
