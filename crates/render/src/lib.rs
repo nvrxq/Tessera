@@ -3,6 +3,7 @@
 //! See `docs/superpowers/specs/2026-05-24-warp-renderer.md`.
 
 pub mod geometry;
+pub mod scene;
 
 pub fn crate_name() -> &'static str {
     "tessera-render"
