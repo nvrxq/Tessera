@@ -69,6 +69,55 @@ impl WorkspaceService {
         tracing::info!(id = %ws.id, branch = %ws.branch, "workspace created");
         Ok(ws)
     }
+
+    pub fn spawn_agent(
+        &self,
+        workspace_id: Uuid,
+        program: &str,
+        args: &[&str],
+        cols: u16,
+        rows: u16,
+    ) -> Result<Uuid> {
+        use tessera_pty::session::SessionConfig;
+
+        let workspace = {
+            let conn = self.db.lock().unwrap();
+            tessera_store::workspaces::get(&conn, workspace_id)?
+                .ok_or_else(|| anyhow::anyhow!("workspace {workspace_id} not found"))?
+        };
+
+        let cfg = SessionConfig {
+            program: program.to_string(),
+            args: args.iter().map(|s| s.to_string()).collect(),
+            cwd: workspace.worktree_path.clone(),
+            cols,
+            rows,
+        };
+        let session_id = self.supervisor.spawn(cfg)?;
+        self.sessions.lock().unwrap().insert(workspace_id, session_id);
+        Ok(session_id)
+    }
+
+    pub fn delete(&self, workspace_id: Uuid, force: bool) -> Result<()> {
+        let workspace = {
+            let conn = self.db.lock().unwrap();
+            tessera_store::workspaces::get(&conn, workspace_id)?
+                .ok_or_else(|| anyhow::anyhow!("workspace {workspace_id} not found"))?
+        };
+
+        // Kill any live session for this workspace.
+        if let Some(session_id) = self.sessions.lock().unwrap().remove(&workspace_id) {
+            let _ = self.supervisor.kill(session_id);
+        }
+
+        // Remove the on-disk worktree (force=true ignores dirty state).
+        tessera_git::worktree::delete(&workspace.repo_path, &workspace.worktree_path, force)?;
+
+        // Delete the DB row last so partial failures still leave something findable.
+        let conn = self.db.lock().unwrap();
+        tessera_store::workspaces::delete(&conn, workspace_id)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -144,5 +193,34 @@ mod tests {
         );
         let listed = svc.list().unwrap();
         assert_eq!(listed.len(), 1, "rollback should leave only the first row");
+    }
+
+    #[test]
+    fn spawn_agent_returns_session_id_and_tracks_it() {
+        let (svc, dir) = make_service();
+        let repo = init_repo(dir.path());
+        let ws = svc.create(&repo, "feat/x").unwrap();
+        let sid = svc
+            .spawn_agent(ws.id, "bash", &["-c", "echo hi; sleep 0.1"], 80, 24)
+            .unwrap();
+        assert_eq!(svc.current_session(ws.id), Some(sid));
+    }
+
+    #[test]
+    fn delete_removes_row_and_worktree() {
+        let (svc, dir) = make_service();
+        let repo = init_repo(dir.path());
+        let ws = svc.create(&repo, "feat/x").unwrap();
+        let wt_path = ws.worktree_path.clone();
+        svc.delete(ws.id, true).unwrap();
+        assert!(!wt_path.exists());
+        assert!(svc.list().unwrap().is_empty());
+        assert_eq!(svc.current_session(ws.id), None);
+    }
+
+    #[test]
+    fn delete_unknown_workspace_errors() {
+        let (svc, _dir) = make_service();
+        assert!(svc.delete(Uuid::new_v4(), true).is_err());
     }
 }
