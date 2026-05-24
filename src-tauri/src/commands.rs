@@ -86,10 +86,15 @@ pub struct WorkspaceDto {
     pub setup_status: SetupStatus,
     pub created_at: DateTime<Utc>,
     pub session_id: Option<Uuid>,
+    pub agent_status: Option<tessera_core::AgentStatus>,
 }
 
 impl WorkspaceDto {
-    fn from_workspace(ws: Workspace, session_id: Option<Uuid>) -> Self {
+    fn from_workspace(
+        ws: Workspace,
+        session_id: Option<Uuid>,
+        agent_status: Option<tessera_core::AgentStatus>,
+    ) -> Self {
         Self {
             id: ws.id,
             name: ws.name,
@@ -99,6 +104,7 @@ impl WorkspaceDto {
             setup_status: ws.setup_status,
             created_at: ws.created_at,
             session_id,
+            agent_status,
         }
     }
 }
@@ -121,10 +127,21 @@ pub fn workspace_create(
     let ws = state
         .create(&args.folder_path, &args.name, branch)
         .map_err(|e| e.to_string())?;
+
+    // Best-effort: install Claude Code hooks so the agent can call back.
+    // We don't fail workspace creation if hook installation fails — the
+    // agent still runs.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Err(e) = state.install_hooks(&ws.worktree_path, ws.id, &exe) {
+            tracing::warn!(error = %e, "install_hooks failed");
+        }
+    }
+
     let sid = state
         .spawn_agent(ws.id, "bash", &["-l"], 80, 24)
         .map_err(|e| e.to_string())?;
-    Ok(WorkspaceDto::from_workspace(ws, Some(sid)))
+    let status = state.status_of(ws.id);
+    Ok(WorkspaceDto::from_workspace(ws, Some(sid), status))
 }
 
 #[tauri::command]
@@ -136,7 +153,8 @@ pub fn workspace_list(
         .into_iter()
         .map(|w| {
             let sid = state.current_session(w.id);
-            WorkspaceDto::from_workspace(w, sid)
+            let status = state.status_of(w.id);
+            WorkspaceDto::from_workspace(w, sid, status)
         })
         .collect())
 }
