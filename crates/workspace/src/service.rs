@@ -94,7 +94,10 @@ impl WorkspaceService {
             rows,
         };
         let session_id = self.supervisor.spawn(cfg)?;
-        self.sessions.lock().unwrap().insert(workspace_id, session_id);
+        self.sessions
+            .lock()
+            .unwrap()
+            .insert(workspace_id, session_id);
         Ok(session_id)
     }
 

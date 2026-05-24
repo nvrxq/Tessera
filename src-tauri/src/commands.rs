@@ -153,7 +153,5 @@ pub fn workspace_delete(
     workspace_id: Uuid,
     force: bool,
 ) -> Result<(), String> {
-    state
-        .delete(workspace_id, force)
-        .map_err(|e| e.to_string())
+    state.delete(workspace_id, force).map_err(|e| e.to_string())
 }

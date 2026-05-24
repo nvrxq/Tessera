@@ -25,11 +25,8 @@ pub fn run() {
     let supervisor: Arc<Supervisor> = Arc::new(Supervisor::new());
 
     let worktree_root = data_dir.join("worktrees");
-    let workspace_service: Arc<WorkspaceService> = Arc::new(WorkspaceService::new(
-        db,
-        supervisor.clone(),
-        worktree_root,
-    ));
+    let workspace_service: Arc<WorkspaceService> =
+        Arc::new(WorkspaceService::new(db, supervisor.clone(), worktree_root));
 
     tauri::Builder::default()
         .manage(supervisor.clone())
