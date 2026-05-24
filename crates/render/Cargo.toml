@@ -6,5 +6,6 @@ license.workspace = true
 publish = false
 
 [dependencies]
+bytemuck = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
