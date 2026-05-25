@@ -13,3 +13,4 @@ pollster = "=0.3.0"
 tracing = { workspace = true }
 
 [dev-dependencies]
+wgpu = "=29.0.3"
