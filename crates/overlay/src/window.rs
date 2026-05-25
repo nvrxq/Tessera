@@ -210,48 +210,77 @@ impl OverlayApp {
     }
 
     fn redraw(&mut self) {
-        let renderer = match self.renderer.as_mut() {
-            Some(r) => r,
-            None => return,
-        };
-        let surface = match self.surface.as_ref() {
-            Some(s) => s,
-            None => return,
-        };
-        // wgpu 29: get_current_texture() returns CurrentSurfaceTexture (an enum),
-        // not Result<SurfaceTexture, SurfaceError>. Extract the inner SurfaceTexture
-        // from Success/Suboptimal; skip the frame on any error variant.
+        let renderer = match self.renderer.as_mut() { Some(r) => r, None => return };
+        let surface = match self.surface.as_ref() { Some(s) => s, None => return };
         let frame = match surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t) => t,
             wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
             _ => return,
         };
 
-        // Placeholder scene — Plan 4 will replace with Term-driven output.
         let mut scene = Scene::new();
+
+        // Background fill — Tessera --bg.
         scene.push_rect(RectEntry {
             rect: Rect::new(0.0, 0.0, self.bounds.w as f32, self.bounds.h as f32),
             color: Color::rgb(15, 15, 16),
             corner_radius: 0.0,
         });
-        let text = "tessera-overlay (Plan 3 placeholder)";
-        let mut x = 16.0_f32;
-        let baseline = 20.0 + self.cell.ascent;
-        for ch in text.chars() {
-            if let Some(g) = self.glyphs.get_or_rasterize(ch, 13.0) {
-                scene.push_glyph(GlyphEntry {
-                    rect: Rect::new(
-                        x + g.bearing[0],
-                        baseline - g.bearing[1],
-                        g.size_px[0] as f32,
-                        g.size_px[1] as f32,
-                    ),
-                    color: Color::rgb(232, 232, 230),
-                    uv_min: g.region.uv_min,
-                    uv_max: g.region.uv_max,
-                });
+
+        // Active session's grid → rect+glyph entries.
+        if let Some(active) = self.active {
+            if let Some(term) = self.sessions.get(&active) {
+                let grid = term.grid(&self.palette);
+                let advance = self.cell.advance_px;
+                let line_h = self.cell.line_height_px;
+                let ascent = self.cell.ascent;
+                for (row_idx, row) in grid.rows_iter().enumerate() {
+                    let y_top = row_idx as f32 * line_h;
+                    let baseline = y_top + ascent;
+                    for (col_idx, cell) in row.iter().enumerate() {
+                        let x_origin = col_idx as f32 * advance;
+                        // Skip cell bg if it matches default — saves ~1900
+                        // instances per frame in a typical 80×24 grid.
+                        if cell.bg != self.palette.default_bg {
+                            scene.push_rect(RectEntry {
+                                rect: Rect::new(x_origin, y_top, advance, line_h),
+                                color: cell.bg,
+                                corner_radius: 0.0,
+                            });
+                        }
+                        // Skip blanks.
+                        if cell.ch == ' ' { continue; }
+                        if let Some(g) = self.glyphs.get_or_rasterize(cell.ch, 13.0) {
+                            scene.push_glyph(GlyphEntry {
+                                rect: Rect::new(
+                                    x_origin + g.bearing[0],
+                                    baseline - g.bearing[1],
+                                    g.size_px[0] as f32,
+                                    g.size_px[1] as f32,
+                                ),
+                                color: cell.fg,
+                                uv_min: g.region.uv_min,
+                                uv_max: g.region.uv_max,
+                            });
+                        }
+                    }
+                }
+
+                // Cursor: solid block at cursor position.
+                let cur = term.cursor();
+                if cur.visible {
+                    scene.push_rect(RectEntry {
+                        rect: Rect::new(
+                            cur.col as f32 * advance,
+                            cur.row as f32 * line_h,
+                            advance.max(2.0),
+                            line_h,
+                        ),
+                        color: self.palette.default_fg,
+                        corner_radius: 0.0,
+                    });
+                }
             }
-            x += self.cell.advance_px;
         }
 
         renderer.render_with_atlas(
@@ -263,11 +292,6 @@ impl OverlayApp {
             &mut self.glyphs,
         );
         frame.present();
-
-        if self.visible {
-            if let Some(w) = &self.window {
-                w.request_redraw();
-            }
-        }
+        // No continuous redraw — redraw is event-driven (FeedBytes / SelectSession etc).
     }
 }
