@@ -1,5 +1,8 @@
 //! Spawns the overlay event loop on a dedicated thread and returns a [`Handle`].
 
+#[cfg(target_os = "linux")]
+use winit::platform::x11::EventLoopBuilderExtX11;
+
 use winit::event_loop::{EventLoop, EventLoopProxy};
 
 use crate::bounds::OverlayConfig;
@@ -20,9 +23,11 @@ pub fn spawn(config: OverlayConfig) -> Handle {
     let join = std::thread::Builder::new()
         .name("tessera-overlay".into())
         .spawn(move || {
-            let el: EventLoop<OverlayMessage> = EventLoop::<OverlayMessage>::with_user_event()
-                .build()
-                .expect("event loop");
+            let mut builder = EventLoop::<OverlayMessage>::with_user_event();
+            // On Linux/X11, permit the event loop to run off the main thread.
+            #[cfg(target_os = "linux")]
+            builder.with_any_thread(true);
+            let el: EventLoop<OverlayMessage> = builder.build().expect("event loop");
             let proxy = el.create_proxy();
             tx.send(proxy).expect("send proxy");
             let mut app = OverlayApp::new(config);
