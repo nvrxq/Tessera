@@ -50,6 +50,10 @@ impl Term {
         self.inner.resize(new);
     }
 
+    pub fn grid<'a>(&'a self, palette: &'a crate::palette::ColorPalette) -> crate::grid::Grid<'a> {
+        crate::grid::Grid::new(&self.inner, palette)
+    }
+
     pub fn cursor(&self) -> crate::cursor::CursorPos {
         let cp = self.inner.cursor_pos();
         // CursorVisibility is in wezterm_surface (not a direct dep); Default is

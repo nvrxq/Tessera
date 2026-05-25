@@ -6,10 +6,12 @@
 pub mod cell;
 pub mod config;
 pub mod cursor;
+pub mod grid;
 pub mod palette;
 pub mod term;
 pub use cell::GridCell;
 pub use cursor::CursorPos;
+pub use grid::Grid;
 pub use term::Term;
 
 pub fn crate_name() -> &'static str {
