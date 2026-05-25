@@ -8,6 +8,7 @@ members = [
     "crates/workspace",
     "crates/hook",
     "crates/render",
+    "crates/term",
     "src-tauri",
 ]
 
