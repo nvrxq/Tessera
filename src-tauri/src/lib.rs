@@ -1,6 +1,5 @@
 mod commands;
 
-use base64::Engine;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
 use tessera_core::AgentStatus;
@@ -42,24 +41,25 @@ pub fn run() {
         .setup(move |app| {
             let handle = app.handle().clone();
 
-            // PTY event pump (Plan 2).
+            // PTY event pump — Data goes to the native overlay, Exit notifies JS.
             {
                 let handle = handle.clone();
+                let overlay_for_pump = overlay.clone();
                 let mut rx = supervisor.subscribe();
                 tauri::async_runtime::spawn(async move {
                     while let Ok(evt) = rx.recv().await {
-                        let payload = match &evt {
-                            PtyEvent::Data { session_id, bytes } => serde_json::json!({
-                                "kind": "data",
-                                "session_id": session_id,
-                                "data_b64": base64::engine::general_purpose::STANDARD.encode(bytes),
-                            }),
-                            PtyEvent::Exit { session_id } => serde_json::json!({
-                                "kind": "exit",
-                                "session_id": session_id,
-                            }),
-                        };
-                        let _ = handle.emit("pty_event", payload);
+                        match evt {
+                            PtyEvent::Data { session_id, bytes } => {
+                                overlay_for_pump.feed_bytes(session_id, bytes);
+                            }
+                            PtyEvent::Exit { session_id } => {
+                                overlay_for_pump.exit_session(session_id);
+                                let _ = handle.emit("pty_event", serde_json::json!({
+                                    "kind": "exit",
+                                    "session_id": session_id,
+                                }));
+                            }
+                        }
                     }
                 });
             }
