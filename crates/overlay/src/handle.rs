@@ -34,6 +34,16 @@ impl Handle {
     }
 }
 
+impl Drop for Handle {
+    fn drop(&mut self) {
+        // Best-effort send; ignore error if proxy is dead.
+        let _ = self.proxy.send_event(OverlayMessage::Shutdown);
+        if let Some(join) = self.join.lock().unwrap().take() {
+            let _ = join.join();
+        }
+    }
+}
+
 // Compile-time assertion: Handle must be Send + Sync so it can live in
 // Arc<Handle> across Tauri's threads (Plan 4 / Task 7).
 const _: fn() = || {

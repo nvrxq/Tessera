@@ -5525,6 +5525,7 @@ dependencies = [
  "tessera-core",
  "tessera-git",
  "tessera-hook",
+ "tessera-overlay",
  "tessera-pty",
  "tessera-store",
  "tessera-workspace",

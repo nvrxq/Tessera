@@ -180,3 +180,28 @@ pub fn workspace_delete(
 ) -> Result<(), String> {
     state.delete(workspace_id, force).map_err(|e| e.to_string())
 }
+
+// ---- Overlay window ----
+
+use tessera_overlay::{Bounds as OverlayBounds, Handle as OverlayHandle};
+
+#[tauri::command]
+pub fn overlay_set_bounds(
+    overlay: tauri::State<'_, std::sync::Arc<OverlayHandle>>,
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+) -> Result<(), String> {
+    overlay.set_bounds(OverlayBounds::new(x, y, w, h));
+    Ok(())
+}
+
+#[tauri::command]
+pub fn overlay_set_visible(
+    overlay: tauri::State<'_, std::sync::Arc<OverlayHandle>>,
+    visible: bool,
+) -> Result<(), String> {
+    overlay.set_visible(visible);
+    Ok(())
+}

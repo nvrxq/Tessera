@@ -19,6 +19,7 @@ tessera-git = { path = "../crates/git" }
 tessera-pty = { path = "../crates/pty" }
 tessera-workspace = { path = "../crates/workspace" }
 tessera-hook = { path = "../crates/hook" }
+tessera-overlay = { path = "../crates/overlay" }
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true

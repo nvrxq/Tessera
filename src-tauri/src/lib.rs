@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
 use tessera_core::AgentStatus;
 use tessera_hook::{HookEvent, HookKind, Listener};
+use tessera_overlay::{Handle as OverlayHandle, OverlayConfig};
 use tessera_pty::{PtyEvent, Supervisor};
 use tessera_workspace::WorkspaceService;
 use tracing_subscriber::EnvFilter;
@@ -32,9 +33,12 @@ pub fn run() {
 
     let socket_path = data_dir.join("hooks.sock");
 
+    let overlay: Arc<OverlayHandle> = Arc::new(tessera_overlay::spawn(OverlayConfig::default()));
+
     tauri::Builder::default()
         .manage(supervisor.clone())
         .manage(workspace_service.clone())
+        .manage(overlay.clone())
         .setup(move |app| {
             let handle = app.handle().clone();
 
@@ -86,6 +90,8 @@ pub fn run() {
             commands::workspace_list,
             commands::workspace_spawn_agent,
             commands::workspace_delete,
+            commands::overlay_set_bounds,
+            commands::overlay_set_visible,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
