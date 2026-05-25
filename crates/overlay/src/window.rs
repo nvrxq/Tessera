@@ -205,8 +205,10 @@ impl OverlayApp {
         );
         frame.present();
 
-        if let Some(w) = &self.window {
-            w.request_redraw();
+        if self.visible {
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
         }
     }
 }
