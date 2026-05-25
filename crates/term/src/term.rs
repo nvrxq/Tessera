@@ -50,6 +50,18 @@ impl Term {
         self.inner.resize(new);
     }
 
+    pub fn cursor(&self) -> crate::cursor::CursorPos {
+        let cp = self.inner.cursor_pos();
+        // CursorVisibility is in wezterm_surface (not a direct dep); Default is
+        // Visible, so equality with default() tells us the cursor is shown.
+        let visible = cp.visibility == Default::default();
+        crate::cursor::CursorPos {
+            col: cp.x,
+            row: cp.y.max(0) as usize,
+            visible,
+        }
+    }
+
     pub fn cols(&self) -> usize {
         self.inner.screen().physical_cols
     }
@@ -98,5 +110,16 @@ mod tests {
         t.resize(120, 40);
         assert_eq!(t.cols(), 120);
         assert_eq!(t.rows(), 40);
+    }
+
+    #[test]
+    fn cursor_moves_after_feed() {
+        let mut t = Term::new(80, 24, writer());
+        let before = t.cursor();
+        t.feed(b"hello");
+        let after = t.cursor();
+        assert_eq!(before.col, 0);
+        assert_eq!(after.col, 5);  // "hello" advances cursor 5 cells
+        assert_eq!(after.row, 0);
     }
 }
