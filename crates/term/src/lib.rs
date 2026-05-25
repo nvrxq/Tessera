@@ -5,6 +5,8 @@
 
 pub mod config;
 pub mod palette;
+pub mod term;
+pub use term::Term;
 
 pub fn crate_name() -> &'static str {
     "tessera-term"

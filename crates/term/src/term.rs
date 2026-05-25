@@ -1,0 +1,102 @@
+//! The `Term` struct — owns a `wezterm_term::Terminal` and presents the
+//! Tessera API.
+
+use std::io::Write;
+use wezterm_term::{Terminal, TerminalSize};
+
+use crate::config::shared_config;
+
+pub struct Term {
+    inner: Terminal,
+}
+
+impl Term {
+    /// Construct a new Term. `writer` is what user keystrokes will be sent to
+    /// (typically the PTY master input). `cols` × `rows` is the initial grid
+    /// size in cells.
+    pub fn new(cols: u16, rows: u16, writer: Box<dyn Write + Send>) -> Self {
+        let size = TerminalSize {
+            cols: cols as usize,
+            rows: rows as usize,
+            pixel_width: 0,
+            pixel_height: 0,
+            dpi: 0,
+        };
+        let inner = Terminal::new(
+            size,
+            shared_config(),
+            "tessera",
+            env!("CARGO_PKG_VERSION"),
+            writer,
+        );
+        Self { inner }
+    }
+
+    /// Feed PTY output bytes into the parser. May be partial sequences.
+    pub fn feed(&mut self, bytes: &[u8]) {
+        self.inner.advance_bytes(bytes);
+    }
+
+    /// Resize the grid in cells. Pixel dimensions are derived later by the
+    /// renderer; wezterm only cares about cell counts.
+    pub fn resize(&mut self, cols: u16, rows: u16) {
+        let new = TerminalSize {
+            cols: cols as usize,
+            rows: rows as usize,
+            pixel_width: 0,
+            pixel_height: 0,
+            dpi: 0,
+        };
+        self.inner.resize(new);
+    }
+
+    pub fn cols(&self) -> usize {
+        self.inner.screen().physical_cols
+    }
+    pub fn rows(&self) -> usize {
+        self.inner.screen().physical_rows
+    }
+
+    // `pub(crate)` exposes the wezterm Terminal to sibling modules
+    // (grid.rs, cell.rs, cursor.rs, blocks.rs) without leaking it externally.
+    pub(crate) fn inner(&self) -> &Terminal {
+        &self.inner
+    }
+    pub(crate) fn inner_mut(&mut self) -> &mut Terminal {
+        &mut self.inner
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    fn writer() -> Box<dyn Write + Send> {
+        Box::new(Cursor::new(Vec::new()))
+    }
+
+    #[test]
+    fn new_term_has_requested_dimensions() {
+        let t = Term::new(80, 24, writer());
+        assert_eq!(t.cols(), 80);
+        assert_eq!(t.rows(), 24);
+    }
+
+    #[test]
+    fn feed_does_not_panic_on_partial_sequence() {
+        let mut t = Term::new(80, 24, writer());
+        // Half of a SGR sequence — wezterm must buffer the rest.
+        t.feed(b"\x1b[1");
+        t.feed(b";31mHello\x1b[0m");
+        // No assert needed; just exercise the path.
+    }
+
+    #[test]
+    fn resize_updates_dimensions() {
+        let mut t = Term::new(80, 24, writer());
+        t.resize(120, 40);
+        assert_eq!(t.cols(), 120);
+        assert_eq!(t.rows(), 40);
+    }
+}
