@@ -7,7 +7,6 @@ import {
   listWorkspaces,
   onWorkspaceStatus,
   onWorkspaceWorktree,
-  spawnAgent,
   type WorkspaceDto,
 } from "./lib/workspaces";
 
@@ -47,15 +46,8 @@ const App: Component = () => {
 
   const selected = () => workspaces()?.find((w) => w.id === selectedId()) ?? null;
 
-  const onSelect = async (id: string) => {
+  const onSelect = (id: string) => {
     setSelectedId(id);
-    const ws = workspaces()?.find((w) => w.id === id);
-    if (ws && ws.session_id == null) {
-      const sid = await spawnAgent(id);
-      mutate((list) =>
-        list?.map((w) => (w.id === id ? { ...w, session_id: sid } : w)) ?? list,
-      );
-    }
   };
 
   const onCreated = (ws: WorkspaceDto) => {
@@ -94,8 +86,18 @@ const App: Component = () => {
           <Show when={showNew()}>
             <NewWorkspaceForm onCreated={onCreated} onCancel={() => setShowNew(false)} />
           </Show>
-          <Show when={!showNew() && selected()?.session_id} keyed>
-            {(sid) => <Terminal sessionId={sid} />}
+          <Show when={!showNew() && selected()} keyed>
+            {(ws) => (
+              <Terminal
+                workspaceId={ws.id}
+                sessionId={ws.session_id}
+                onSpawned={(sid) =>
+                  mutate((list) =>
+                    list?.map((w) => (w.id === ws.id ? { ...w, session_id: sid } : w)) ?? list,
+                  )
+                }
+              />
+            )}
           </Show>
           <Show when={!showNew() && !selected()}>
             <div class="empty-state">
