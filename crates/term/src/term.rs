@@ -65,9 +65,7 @@ impl Term {
 
     pub fn cursor(&self) -> crate::cursor::CursorPos {
         let cp = self.inner.cursor_pos();
-        // CursorVisibility is in wezterm_surface (not a direct dep); Default is
-        // Visible, so equality with default() tells us the cursor is shown.
-        let visible = cp.visibility == Default::default();
+        let visible = matches!(cp.visibility, wezterm_surface::CursorVisibility::Visible);
         crate::cursor::CursorPos {
             col: cp.x,
             row: cp.y.max(0) as usize,
