@@ -1,0 +1,15 @@
+[package]
+name = "tessera-overlay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+tessera-render = { path = "../render" }
+wgpu = "=29.0.3"
+winit = "=0.30.9"
+pollster = "=0.3.0"
+tracing = { workspace = true }
+
+[dev-dependencies]

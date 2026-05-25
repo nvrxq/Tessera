@@ -7,6 +7,7 @@ members = [
     "crates/pty",
     "crates/workspace",
     "crates/hook",
+    "crates/overlay",
     "crates/render",
     "crates/term",
     "src-tauri",

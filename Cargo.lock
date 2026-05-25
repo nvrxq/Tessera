@@ -5575,6 +5575,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tessera-overlay"
+version = "0.1.0"
+dependencies = [
+ "pollster",
+ "tessera-render",
+ "tracing",
+ "wgpu",
+ "winit",
+]
+
+[[package]]
 name = "tessera-pty"
 version = "0.1.0"
 dependencies = [
@@ -5623,11 +5634,10 @@ dependencies = [
 name = "tessera-term"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "serde_json",
  "tessera-render",
- "tokio",
  "wezterm-escape-parser",
+ "wezterm-surface",
  "wezterm-term",
 ]
 
