@@ -36,7 +36,7 @@ impl TerminalConfiguration for TesseraConfig {
     }
 }
 
-pub fn shared_config() -> Arc<dyn TerminalConfiguration> {
+pub fn shared_config() -> Arc<dyn TerminalConfiguration + Send + Sync> {
     Arc::new(TesseraConfig::default())
 }
 
