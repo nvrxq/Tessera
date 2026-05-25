@@ -16,6 +16,9 @@ pub use messages::OverlayMessage;
 pub mod window;
 pub use window::OverlayApp;
 
+pub mod handle;
+pub use handle::Handle;
+
 pub mod thread;
 pub use thread::spawn;
 
