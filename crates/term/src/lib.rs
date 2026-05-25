@@ -5,7 +5,7 @@
 
 pub mod blocks;
 pub mod cell;
-pub mod config;
+pub(crate) mod config;
 pub mod cursor;
 pub mod grid;
 pub mod palette;

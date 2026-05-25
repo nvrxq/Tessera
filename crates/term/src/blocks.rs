@@ -30,7 +30,7 @@ impl BlockSink {
     pub fn new() -> Self {
         Self::default()
     }
-    pub fn handle(&self) -> Arc<Mutex<Vec<BlockEvent>>> {
+    pub(crate) fn handle(&self) -> Arc<Mutex<Vec<BlockEvent>>> {
         Arc::clone(&self.inner)
     }
 
@@ -44,7 +44,7 @@ impl BlockSink {
 ///
 /// T10: buffers body bytes between DCS Enter/Data/Exit, sniffs the Tessera
 /// DCS kind via the `+t` intermediate+final pair, and parses on Exit.
-pub struct BlockHandler {
+pub(crate) struct BlockHandler {
     inner: Arc<Mutex<Vec<BlockEvent>>>,
     /// Buffered DCS body bytes accumulated between Enter and Exit.
     buf: Vec<u8>,
@@ -54,7 +54,7 @@ pub struct BlockHandler {
 }
 
 impl BlockHandler {
-    pub fn new(sink: &BlockSink) -> Self {
+    pub(crate) fn new(sink: &BlockSink) -> Self {
         Self {
             inner: sink.handle(),
             buf: Vec::new(),
