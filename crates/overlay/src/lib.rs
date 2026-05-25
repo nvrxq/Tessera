@@ -11,27 +11,11 @@ pub mod bounds;
 pub use bounds::{Bounds, OverlayConfig};
 
 pub mod messages;
-pub use messages::OverlayMessage;
 
 pub mod window;
-pub use window::OverlayApp;
 
 pub mod handle;
 pub use handle::Handle;
 
 pub mod thread;
 pub use thread::spawn;
-
-pub fn crate_name() -> &'static str {
-    "tessera-overlay"
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn crate_name_is_tessera_overlay() {
-        assert_eq!(crate_name(), "tessera-overlay");
-    }
-}

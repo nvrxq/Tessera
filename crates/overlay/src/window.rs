@@ -19,9 +19,9 @@ use crate::messages::OverlayMessage;
 const FONT: &[u8] = include_bytes!("../../render/assets/GeistMono-Regular.ttf");
 
 pub struct OverlayApp {
-    pub(crate) config: OverlayConfig,
-    pub(crate) bounds: Bounds,
-    pub(crate) visible: bool,
+    config: OverlayConfig,
+    bounds: Bounds,
+    visible: bool,
     window: Option<Arc<Window>>,
     surface: Option<wgpu::Surface<'static>>,
     surface_format: wgpu::TextureFormat,
