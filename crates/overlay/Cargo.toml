@@ -9,7 +9,6 @@ publish = false
 tessera-render = { path = "../render" }
 wgpu = "=29.0.3"
 winit = "=0.30.9"
-pollster = "=0.3.0"
 tracing = { workspace = true }
 
 [dev-dependencies]
