@@ -5624,8 +5624,10 @@ name = "tessera-term"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "serde_json",
  "tessera-render",
  "tokio",
+ "wezterm-escape-parser",
  "wezterm-term",
 ]
 

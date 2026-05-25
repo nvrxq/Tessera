@@ -4,10 +4,12 @@
 use std::io::Write;
 use wezterm_term::{Terminal, TerminalSize};
 
+use crate::blocks::{BlockEvent, BlockHandler, BlockSink};
 use crate::config::shared_config;
 
 pub struct Term {
     inner: Terminal,
+    blocks: BlockSink,
 }
 
 impl Term {
@@ -22,14 +24,21 @@ impl Term {
             pixel_height: 0,
             dpi: 0,
         };
-        let inner = Terminal::new(
+        let mut inner = Terminal::new(
             size,
             shared_config(),
             "tessera",
             env!("CARGO_PKG_VERSION"),
             writer,
         );
-        Self { inner }
+        let blocks = BlockSink::new();
+        inner.set_device_control_handler(Box::new(BlockHandler::new(&blocks)));
+        Self { inner, blocks }
+    }
+
+    /// Drain and return any block events accumulated since the last call.
+    pub fn take_block_events(&mut self) -> Vec<BlockEvent> {
+        self.blocks.drain()
     }
 
     /// Feed PTY output bytes into the parser. May be partial sequences.
