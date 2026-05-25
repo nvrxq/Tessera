@@ -5580,6 +5580,7 @@ name = "tessera-overlay"
 version = "0.1.0"
 dependencies = [
  "tessera-render",
+ "tessera-term",
  "tracing",
  "uuid",
  "wgpu",

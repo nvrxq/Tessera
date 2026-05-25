@@ -1,6 +1,9 @@
 //! winit `ApplicationHandler` implementation for the overlay window.
 
+use std::collections::HashMap;
+use std::io::Write;
 use std::sync::Arc;
+use tessera_term::{palette::ColorPalette, Term};
 use tessera_render::{
     geometry::{Color, Rect},
     glyph_cache::GlyphCache,
@@ -8,6 +11,7 @@ use tessera_render::{
     resources::Resources,
     scene::{GlyphEntry, RectEntry, Scene},
 };
+use uuid::Uuid;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
@@ -15,6 +19,16 @@ use winit::window::{Window, WindowId};
 
 use crate::bounds::{Bounds, OverlayConfig};
 use crate::messages::OverlayMessage;
+
+/// No-op writer for wezterm's `Terminal::new` — keystroke echo is routed
+/// via Tauri's `pty_write` command to `Supervisor::write`, not through
+/// wezterm's writer. wezterm needs a Write impl to construct; this is
+/// the silent sink.
+struct DevNull;
+impl Write for DevNull {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> { Ok(buf.len()) }
+    fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+}
 
 const FONT: &[u8] = include_bytes!("../../render/assets/GeistMono-Regular.ttf");
 
@@ -30,6 +44,9 @@ pub struct OverlayApp {
     renderer: Option<Renderer>,
     glyphs: GlyphCache<'static>,
     cell: tessera_render::glyph_cache::CellMetrics,
+    palette: ColorPalette,
+    sessions: HashMap<Uuid, Term>,
+    active: Option<Uuid>,
 }
 
 impl OverlayApp {
@@ -49,6 +66,9 @@ impl OverlayApp {
             renderer: None,
             glyphs,
             cell,
+            palette: ColorPalette::tessera_dark(),
+            sessions: HashMap::new(),
+            active: None,
         }
     }
 }
@@ -145,19 +165,50 @@ impl ApplicationHandler<OverlayMessage> for OverlayApp {
                     w.set_visible(v);
                 }
             }
-            OverlayMessage::Shutdown => {
-                el.exit();
+            OverlayMessage::FeedBytes { session_id, bytes } => {
+                let (cols, rows) = self.compute_cell_grid();
+                let term = self.sessions.entry(session_id).or_insert_with(|| {
+                    Term::new(cols, rows, Box::new(DevNull))
+                });
+                term.feed(&bytes);
+                if Some(session_id) == self.active && self.visible {
+                    if let Some(w) = &self.window { w.request_redraw(); }
+                }
             }
-            // These variants will be wired in Plan 4 follow-on tasks.
-            OverlayMessage::FeedBytes { .. }
-            | OverlayMessage::ExitSession(_)
-            | OverlayMessage::SelectSession(_)
-            | OverlayMessage::ResizeGrid { .. } => {}
+            OverlayMessage::ExitSession(id) => {
+                self.sessions.remove(&id);
+                if Some(id) == self.active {
+                    self.active = None;
+                    if self.visible {
+                        if let Some(w) = &self.window { w.request_redraw(); }
+                    }
+                }
+            }
+            OverlayMessage::SelectSession(id) => {
+                self.active = id;
+                if self.visible {
+                    if let Some(w) = &self.window { w.request_redraw(); }
+                }
+            }
+            OverlayMessage::ResizeGrid { cols, rows } => {
+                if let Some(id) = self.active {
+                    if let Some(term) = self.sessions.get_mut(&id) {
+                        term.resize(cols, rows);
+                    }
+                }
+            }
+            OverlayMessage::Shutdown => { el.exit(); }
         }
     }
 }
 
 impl OverlayApp {
+    fn compute_cell_grid(&self) -> (u16, u16) {
+        let cols = ((self.bounds.w as f32) / self.cell.advance_px).floor().max(1.0) as u16;
+        let rows = ((self.bounds.h as f32) / self.cell.line_height_px).floor().max(1.0) as u16;
+        (cols, rows)
+    }
+
     fn redraw(&mut self) {
         let renderer = match self.renderer.as_mut() {
             Some(r) => r,
