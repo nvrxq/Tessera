@@ -10,6 +10,9 @@
 pub mod bounds;
 pub use bounds::{Bounds, OverlayConfig};
 
+pub mod messages;
+pub use messages::OverlayMessage;
+
 pub fn crate_name() -> &'static str {
     "tessera-overlay"
 }
