@@ -1,6 +1,7 @@
 //! `GridCell` — a flat, ready-to-render representation of one terminal cell.
 
 use tessera_render::geometry::Color;
+use unicode_normalization::UnicodeNormalization;
 use wezterm_term::Cell as WezCell;
 use crate::palette::ColorPalette;
 
@@ -19,9 +20,14 @@ pub struct GridCell {
 
 impl GridCell {
     /// Resolve a wezterm `Cell` against the given palette.
+    ///
+    /// Applies NFKC compatibility normalization: superscript / modifier-letter
+    /// codepoints (e.g. U+2071 `ⁱ`, U+1D49 `ᵉ`, U+02B7 `ʷ`) fold to their
+    /// base ASCII forms. Without this, Claude Code's TUI styling — which uses
+    /// these codepoints as decorative "small text" — renders unreadably tiny.
     pub fn from_wez(cell: &WezCell, palette: &ColorPalette) -> Self {
         let s = cell.str();
-        let ch = s.chars().next().unwrap_or(' ');
+        let ch = s.nfkc().next().unwrap_or(' ');
         let a = cell.attrs();
         Self {
             ch,
@@ -50,6 +56,30 @@ mod tests {
         assert!(!g.bold);
         assert!(!g.italic);
         assert!(!g.underline);
+    }
+
+    #[test]
+    fn superscript_modifier_letters_fold_to_ascii() {
+        let pal = ColorPalette::tessera_dark();
+        // U+2071 SUPERSCRIPT LATIN SMALL LETTER I → 'i'
+        let cell = WezCell::new('\u{2071}', CellAttributes::default());
+        assert_eq!(GridCell::from_wez(&cell, &pal).ch, 'i');
+        // U+1D49 MODIFIER LETTER SMALL E → 'e'
+        let cell = WezCell::new('\u{1D49}', CellAttributes::default());
+        assert_eq!(GridCell::from_wez(&cell, &pal).ch, 'e');
+        // U+02B7 MODIFIER LETTER SMALL W → 'w'
+        let cell = WezCell::new('\u{02B7}', CellAttributes::default());
+        assert_eq!(GridCell::from_wez(&cell, &pal).ch, 'w');
+        // U+1D39 MODIFIER LETTER CAPITAL M (small-caps style) → 'M'
+        let cell = WezCell::new('\u{1D39}', CellAttributes::default());
+        assert_eq!(GridCell::from_wez(&cell, &pal).ch, 'M');
+    }
+
+    #[test]
+    fn cyrillic_passes_through_unchanged() {
+        let pal = ColorPalette::tessera_dark();
+        let cell = WezCell::new('Ф', CellAttributes::default());
+        assert_eq!(GridCell::from_wez(&cell, &pal).ch, 'Ф');
     }
 
     #[test]

@@ -5638,6 +5638,7 @@ version = "0.1.0"
 dependencies = [
  "serde_json",
  "tessera-render",
+ "unicode-normalization",
  "wezterm-escape-parser",
  "wezterm-surface",
  "wezterm-term",

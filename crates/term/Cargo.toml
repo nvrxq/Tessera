@@ -11,5 +11,6 @@ wezterm-escape-parser = { git = "https://github.com/wezterm/wezterm", rev = "577
 wezterm-surface = { git = "https://github.com/wezterm/wezterm", rev = "577474d89ee6", default-features = false }
 tessera-render = { path = "../render" }
 serde_json = { workspace = true }
+unicode-normalization = "=0.1.25"
 
 [dev-dependencies]
