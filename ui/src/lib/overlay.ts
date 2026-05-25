@@ -64,3 +64,11 @@ export function syncOverlayToElement(el: HTMLElement): () => void {
     void invoke("overlay_set_visible", { visible: false });
   };
 }
+
+export async function selectOverlaySession(sessionId: string | null): Promise<void> {
+  await invoke("overlay_select_session", { sessionId });
+}
+
+export async function resizeOverlayGrid(cols: number, rows: number): Promise<void> {
+  await invoke("overlay_resize_grid", { cols, rows });
+}
