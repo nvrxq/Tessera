@@ -15,6 +15,7 @@ pub use cell::GridCell;
 pub use cursor::CursorPos;
 pub use grid::Grid;
 pub use term::Term;
+pub use tessera_render::geometry::Color;
 
 pub fn crate_name() -> &'static str {
     "tessera-term"
