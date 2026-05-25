@@ -25,6 +25,7 @@ pub struct OverlayApp {
     window: Option<Arc<Window>>,
     surface: Option<wgpu::Surface<'static>>,
     surface_format: wgpu::TextureFormat,
+    surface_alpha_mode: wgpu::CompositeAlphaMode,
     res: Resources,
     renderer: Option<Renderer>,
     glyphs: GlyphCache<'static>,
@@ -43,6 +44,7 @@ impl OverlayApp {
             window: None,
             surface: None,
             surface_format: wgpu::TextureFormat::Bgra8UnormSrgb,
+            surface_alpha_mode: wgpu::CompositeAlphaMode::Auto,
             res,
             renderer: None,
             glyphs,
@@ -88,6 +90,7 @@ impl ApplicationHandler<OverlayMessage> for OverlayApp {
             },
         );
         self.surface_format = format;
+        self.surface_alpha_mode = caps.alpha_modes[0];
         self.renderer = Some(Renderer::new(&self.res.device, format, self.config.atlas_size));
         self.surface = Some(surface);
         self.window = Some(window);
@@ -108,7 +111,7 @@ impl ApplicationHandler<OverlayMessage> for OverlayApp {
                             width: self.bounds.w,
                             height: self.bounds.h,
                             present_mode: wgpu::PresentMode::Fifo,
-                            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+                            alpha_mode: self.surface_alpha_mode,
                             view_formats: vec![],
                             desired_maximum_frame_latency: 2,
                         },
