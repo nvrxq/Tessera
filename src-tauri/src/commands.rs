@@ -205,3 +205,22 @@ pub fn overlay_set_visible(
     overlay.set_visible(visible);
     Ok(())
 }
+
+#[tauri::command]
+pub fn overlay_select_session(
+    overlay: tauri::State<'_, std::sync::Arc<OverlayHandle>>,
+    session_id: Option<Uuid>,
+) -> Result<(), String> {
+    overlay.select_session(session_id);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn overlay_resize_grid(
+    overlay: tauri::State<'_, std::sync::Arc<OverlayHandle>>,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    overlay.resize_grid(cols, rows);
+    Ok(())
+}

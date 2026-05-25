@@ -92,6 +92,8 @@ pub fn run() {
             commands::workspace_delete,
             commands::overlay_set_bounds,
             commands::overlay_set_visible,
+            commands::overlay_select_session,
+            commands::overlay_resize_grid,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
