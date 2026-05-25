@@ -16,6 +16,9 @@ pub use messages::OverlayMessage;
 pub mod window;
 pub use window::OverlayApp;
 
+pub mod thread;
+pub use thread::spawn;
+
 pub fn crate_name() -> &'static str {
     "tessera-overlay"
 }
