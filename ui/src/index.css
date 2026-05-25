@@ -250,18 +250,24 @@ header h1:hover .t-accent {
   background: var(--surface);
 }
 
-/* —— terminal —— */
-.terminal-host {
+/* —— overlay anchor (native wgpu overlay covers this region) —— */
+.overlay-anchor {
   flex: 1;
   min-height: 0;
-  padding: 8px;
-  animation: pane-fade-in var(--t-medium) var(--ease-out) both;
+  min-width: 0;
+  background: var(--bg);
+  outline: none;
+  position: relative;
 }
-.terminal-host .xterm {
-  height: 100%;
-}
-.terminal-host .xterm-viewport {
-  background: var(--surface) !important;
+.overlay-anchor::before {
+  content: "(native overlay)";
+  position: absolute;
+  inset: 12px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  opacity: 0.18;
+  pointer-events: none;
 }
 
 /* —— empty state with mosaic motif —— */
