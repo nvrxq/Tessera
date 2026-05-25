@@ -25,6 +25,22 @@ impl Handle {
         let _ = self.proxy.send_event(OverlayMessage::SetVisible(v));
     }
 
+    pub fn feed_bytes(&self, session_id: uuid::Uuid, bytes: Vec<u8>) {
+        let _ = self.proxy.send_event(OverlayMessage::FeedBytes { session_id, bytes });
+    }
+
+    pub fn exit_session(&self, session_id: uuid::Uuid) {
+        let _ = self.proxy.send_event(OverlayMessage::ExitSession(session_id));
+    }
+
+    pub fn select_session(&self, session_id: Option<uuid::Uuid>) {
+        let _ = self.proxy.send_event(OverlayMessage::SelectSession(session_id));
+    }
+
+    pub fn resize_grid(&self, cols: u16, rows: u16) {
+        let _ = self.proxy.send_event(OverlayMessage::ResizeGrid { cols, rows });
+    }
+
     /// Send Shutdown and wait for the event loop to finish. Idempotent.
     pub fn shutdown(&self) {
         let _ = self.proxy.send_event(OverlayMessage::Shutdown);
