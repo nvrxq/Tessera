@@ -5579,9 +5579,9 @@ dependencies = [
 name = "tessera-overlay"
 version = "0.1.0"
 dependencies = [
- "pollster",
  "tessera-render",
  "tracing",
+ "uuid",
  "wgpu",
  "winit",
 ]

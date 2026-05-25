@@ -148,6 +148,11 @@ impl ApplicationHandler<OverlayMessage> for OverlayApp {
             OverlayMessage::Shutdown => {
                 el.exit();
             }
+            // These variants will be wired in Plan 4 follow-on tasks.
+            OverlayMessage::FeedBytes { .. }
+            | OverlayMessage::ExitSession(_)
+            | OverlayMessage::SelectSession(_)
+            | OverlayMessage::ResizeGrid { .. } => {}
         }
     }
 }
