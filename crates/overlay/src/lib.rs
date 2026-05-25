@@ -7,6 +7,9 @@
 //! with it via [`Handle`] which sends messages through winit's
 //! `EventLoopProxy`.
 
+pub mod bounds;
+pub use bounds::{Bounds, OverlayConfig};
+
 pub fn crate_name() -> &'static str {
     "tessera-overlay"
 }
