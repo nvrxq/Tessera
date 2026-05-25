@@ -42,17 +42,23 @@ impl BlockSink {
 
 /// Adapter we hand to wezterm-term as the `DeviceControlHandler`.
 ///
-/// T8 implements only `parse_payload` (string → event) and a stub
-/// `handle_device_control` (no byte assembly yet). T10 completes the byte
-/// buffering between DCS Enter/Data/Exit events.
+/// T10: buffers body bytes between DCS Enter/Data/Exit, sniffs the Tessera
+/// DCS kind via the `+t` intermediate+final pair, and parses on Exit.
 pub struct BlockHandler {
     inner: Arc<Mutex<Vec<BlockEvent>>>,
+    /// Buffered DCS body bytes accumulated between Enter and Exit.
+    buf: Vec<u8>,
+    /// Whether we're currently inside a Tessera DCS sequence.
+    /// Set to true when Enter arrives with intermediates=[b'+'] and byte=b't'.
+    in_tessera: bool,
 }
 
 impl BlockHandler {
     pub fn new(sink: &BlockSink) -> Self {
         Self {
             inner: sink.handle(),
+            buf: Vec::new(),
+            in_tessera: false,
         }
     }
 
@@ -98,15 +104,44 @@ impl BlockHandler {
     }
 }
 
-// Trait impl is intentionally minimal — T10 fills the body-assembly path.
-// For now we just implement the trait so `Terminal::set_device_control_handler`
-// accepts our type.
 impl wezterm_term::DeviceControlHandler for BlockHandler {
     fn handle_device_control(
         &mut self,
-        _control: wezterm_escape_parser::DeviceControlMode,
+        control: wezterm_escape_parser::DeviceControlMode,
     ) {
-        // Stub: byte-assembly between Enter/Data/Exit lands in T10.
+        use wezterm_escape_parser::DeviceControlMode as M;
+        match control {
+            // Tessera DCS sequences arrive as ESC P + t <data> ST where
+            // `+` is the intermediate byte and `t` is the final byte.
+            // wezterm-escape-parser fires Enter with intermediates=[b'+'],
+            // byte=b't', then Data for each body byte, then Exit.
+            M::Enter(ref e) => {
+                self.buf.clear();
+                self.in_tessera =
+                    e.intermediates == [b'+'] && e.byte == b't';
+            }
+            M::Data(b) => {
+                if self.in_tessera {
+                    self.buf.push(b);
+                }
+            }
+            M::Exit => {
+                if self.in_tessera {
+                    // Reconstruct the full payload that parse_payload expects:
+                    // "+tessera;v=1;{...}" — the `+t` prefix was the DCS
+                    // intermediate+final, and `essera;v=1;{...}` is in buf.
+                    let buf = std::mem::take(&mut self.buf);
+                    if let Ok(body) = std::str::from_utf8(&buf) {
+                        let payload = format!("+t{body}");
+                        self.parse_payload(&payload);
+                    }
+                }
+                self.buf.clear();
+                self.in_tessera = false;
+            }
+            // ShortDeviceControl, TmuxEvents, and any future variants ignored.
+            _ => {}
+        }
     }
 }
 
