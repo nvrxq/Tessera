@@ -5,6 +5,14 @@ use swash::FontRef;
 
 use crate::atlas::{AllocatedRegion, Atlas};
 
+/// Loose monospace leading. Multiplied by `px_size` to get pixel line height.
+/// Matches Warp's `line_height_ratio` default.
+const LINE_HEIGHT_RATIO: f32 = 1.4;
+
+/// Fraction of the line that sits above the baseline. The remaining 20%
+/// is reserved for descenders. From Warp's `DEFAULT_TOP_BOTTOM_RATIO`.
+const BASELINE_RATIO: f32 = 0.8;
+
 #[derive(Clone, Debug)]
 pub struct GlyphMetrics {
     pub advance: f32,
@@ -51,16 +59,30 @@ impl<'a> GlyphCache<'a> {
     }
 
     pub fn cell_metrics(&self, px_size: f32) -> CellMetrics {
-        let m = self.font.metrics(&[]).scale(px_size);
+        // Cell width: take 'M' advance from the font — monospaced fonts are
+        // uniform; 'M' is the canonical reference.
         let charmap = self.font.charmap();
         let gid = charmap.map('M');
         let advance = self.font.glyph_metrics(&[]).scale(px_size).advance_width(gid);
+
+        // Line height: use a fixed ratio of font size rather than trusting
+        // signed OpenType descender values directly. This follows Warp's
+        // approach in `warpdotdev/warp::warpui_core::text_layout` — see the
+        // `DEFAULT_TOP_BOTTOM_RATIO = 0.8` constant and `line_height_ratio`
+        // field. Apache 2.0; cited.
+        //
+        // line_height = font_size × 1.4 (industry-standard "loose" monospace
+        // leading; matches Geist Mono's intended on-screen rhythm).
+        // baseline    = 80% from the top of the line, 20% below for descenders.
+        let line_height_px = (px_size * LINE_HEIGHT_RATIO).ceil();
+        let ascent = line_height_px * BASELINE_RATIO;
+        let descent = line_height_px - ascent;
         CellMetrics {
             advance_px: advance.ceil(),
-            ascent: m.ascent,
-            descent: m.descent,
-            line_gap: m.leading,
-            line_height_px: (m.ascent + m.descent + m.leading).ceil(),
+            ascent,
+            descent,
+            line_gap: 0.0,
+            line_height_px,
         }
     }
 
