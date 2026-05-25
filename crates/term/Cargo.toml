@@ -9,8 +9,6 @@ publish = false
 wezterm-term = { git = "https://github.com/wezterm/wezterm", rev = "577474d89ee6", default-features = false }
 wezterm-escape-parser = { git = "https://github.com/wezterm/wezterm", rev = "577474d89ee6", default-features = false }
 tessera-render = { path = "../render" }
-anyhow = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true }
 
 [dev-dependencies]
