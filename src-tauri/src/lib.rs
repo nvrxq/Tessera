@@ -219,6 +219,7 @@ pub fn run() {
             commands::workspace_assign_project,
             commands::terminal_resize,
             commands::list_directories,
+            commands::save_paste_image,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

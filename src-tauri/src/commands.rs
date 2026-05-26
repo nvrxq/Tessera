@@ -377,3 +377,27 @@ pub fn terminal_resize(
     }
     Ok(())
 }
+
+/// Persist a pasted image (PNG bytes, base64-encoded) to disk and return
+/// the absolute path. Frontend pastes flow: clipboard → readImage → encode
+/// PNG via canvas.toDataURL → this command → write returned path into the
+/// PTY (wrapped in bracketed-paste markers) so Claude Code attaches it.
+///
+/// Stored under `~/Library/Application Support/tessera/pastes/<uuid>.png`
+/// on macOS, `~/.local/share/tessera/pastes/<uuid>.png` on Linux. We do
+/// NOT auto-clean — keep things simple; the directory is small (PNGs
+/// from clipboard are typically ≤2 MB) and predictable.
+#[tauri::command]
+pub fn save_paste_image(data_b64: String) -> Result<String, String> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_b64.as_bytes())
+        .map_err(|e| format!("invalid base64: {e}"))?;
+    let dir = dirs::data_local_dir()
+        .ok_or_else(|| "no platform data dir".to_string())?
+        .join("tessera")
+        .join("pastes");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(format!("{}.png", Uuid::new_v4()));
+    std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().to_string())
+}
