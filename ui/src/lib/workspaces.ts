@@ -15,6 +15,15 @@ export interface WorkspaceDto {
   dangerous_skip_permissions: boolean;
   session_id: string | null;
   agent_status: AgentStatus | null;
+  project_id: string | null;
+  sort_order: number;
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  accent: string | null;
+  created_at: string;
 }
 
 export interface WorkspaceStatusEvent {
@@ -32,14 +41,46 @@ export function createWorkspace(
   folderPath: string,
   name: string,
   dangerousSkipPermissions: boolean,
+  projectId: string | null = null,
 ): Promise<WorkspaceDto> {
   return invoke<WorkspaceDto>("workspace_create", {
     args: {
       folder_path: folderPath,
       name,
       dangerous_skip_permissions: dangerousSkipPermissions,
+      project_id: projectId,
     },
   });
+}
+
+export function listProjects(): Promise<Project[]> {
+  return invoke<Project[]>("project_list");
+}
+
+export function createProject(name: string, accent: string | null): Promise<Project> {
+  return invoke<Project>("project_create", { name, accent });
+}
+
+export function deleteProject(id: string): Promise<void> {
+  return invoke<void>("project_delete", { id });
+}
+
+/** Reorder request item. Self-describing wire shape lines up with the
+ *  Rust `ReorderEntry` struct in `src-tauri/src/commands.rs`. */
+export interface ReorderEntry {
+  workspace_id: string;
+  sort_order: number;
+}
+
+export function workspaceReorder(updates: ReorderEntry[]): Promise<void> {
+  return invoke<void>("workspace_reorder", { updates });
+}
+
+export function workspaceAssignProject(
+  workspaceId: string,
+  projectId: string | null,
+): Promise<void> {
+  return invoke<void>("workspace_assign_project", { workspaceId, projectId });
 }
 
 export function listWorkspaces(): Promise<WorkspaceDto[]> {

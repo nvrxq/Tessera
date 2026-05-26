@@ -4,10 +4,13 @@ import NewWorkspaceForm from "./NewWorkspaceForm";
 import Terminal from "./Terminal";
 import {
   deleteWorkspace,
+  listProjects,
   listWorkspaces,
   onWorkspaceStatus,
   onWorkspaceWorktree,
   spawnAgent,
+  workspaceReorder,
+  type Project,
   type WorkspaceDto,
 } from "./lib/workspaces";
 
@@ -41,6 +44,8 @@ function applyTheme(t: Theme) {
 
 const App: Component = () => {
   const [workspaces, { mutate, refetch }] = createResource<WorkspaceDto[]>(listWorkspaces);
+  const [projects, { refetch: refetchProjects }] =
+    createResource<Project[]>(listProjects);
   const [selectedId, setSelectedId] = createSignal<string | null>(null);
   const [showNew, setShowNew] = createSignal(false);
   const clock = useClock();
@@ -122,6 +127,41 @@ const App: Component = () => {
     setShowNew(false);
   };
 
+  // Reorder a section of workspaces. The Sidebar passes the new ordered list
+  // of ids for either the "active" or "passive" section; we recompute
+  // sort_order (gapped by 10 so future inserts don't trigger a full
+  // resequence) and push the update to the backend. Optimistic: we mutate
+  // the local list first, then call workspace_reorder; on failure we refetch.
+  const onReorder = async (
+    _section: "active" | "passive",
+    orderedIds: string[],
+  ) => {
+    // Recompute sort_order with a gap of 10 between rows so a future
+    // single-row insert can land between two neighbours without
+    // triggering a full resequence. Wire shape is named-struct to
+    // match Rust `ReorderEntry` (see lib/workspaces.ts).
+    const updates = orderedIds.map((id, idx) => ({
+      workspace_id: id,
+      sort_order: (idx + 1) * 10,
+    }));
+    const order = new Map(updates.map((u) => [u.workspace_id, u.sort_order]));
+    mutate((list) =>
+      list?.map((w) =>
+        order.has(w.id) ? { ...w, sort_order: order.get(w.id)! } : w,
+      ) ?? list,
+    );
+    try {
+      await workspaceReorder(updates);
+    } catch (e) {
+      console.error("workspace_reorder failed", e);
+      refetch();
+    }
+  };
+
+  const onProjectsChanged = () => {
+    refetchProjects();
+  };
+
   const onDelete = async (id: string) => {
     try {
       await deleteWorkspace(id, true);
@@ -175,14 +215,21 @@ const App: Component = () => {
         <div class="layout">
           <Sidebar
             workspaces={workspaces() ?? []}
+            projects={projects() ?? []}
             selectedId={selectedId()}
             onSelect={onSelect}
             onDelete={onDelete}
             onNew={() => setShowNew(true)}
+            onReorder={onReorder}
           />
           <main class="main-pane">
             <Show when={showNew()}>
-              <NewWorkspaceForm onCreated={onCreated} onCancel={() => setShowNew(false)} />
+              <NewWorkspaceForm
+                projects={projects() ?? []}
+                onCreated={onCreated}
+                onCancel={() => setShowNew(false)}
+                onProjectsChanged={onProjectsChanged}
+              />
             </Show>
             <Show when={!showNew() && selected()?.id}>
               <Terminal

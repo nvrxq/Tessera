@@ -3,9 +3,18 @@ use rusqlite::Connection;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use tessera_core::Workspace;
+use tessera_core::{Project, Workspace};
 use tessera_pty::Supervisor;
 use uuid::Uuid;
+
+/// Accept only `"#RRGGBB"` strings. We keep this strict so the frontend can
+/// trust the accent value enough to inject it straight into CSS.
+fn is_valid_hex_color(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    bytes.len() == 7
+        && bytes[0] == b'#'
+        && bytes[1..].iter().all(|b| b.is_ascii_hexdigit())
+}
 
 pub struct WorkspaceService {
     db: Arc<Mutex<Connection>>,
@@ -52,11 +61,33 @@ impl WorkspaceService {
         folder_path: &std::path::Path,
         name: &str,
         dangerous_skip_permissions: bool,
+        project_id: Option<Uuid>,
     ) -> Result<Workspace> {
         use chrono::Utc;
         use tessera_core::SetupStatus;
 
         anyhow::ensure!(!name.trim().is_empty(), "workspace name is required");
+
+        let conn = self.db.lock().unwrap();
+
+        // Validate the referenced project exists, so we don't insert a
+        // dangling FK that SQLite would later reject.
+        if let Some(pid) = project_id {
+            anyhow::ensure!(
+                tessera_store::projects::get(&conn, pid)?.is_some(),
+                "project {pid} not found",
+            );
+        }
+
+        // New workspaces go to the end of the list so user-curated order is
+        // never disturbed by a fresh row jumping to the top.
+        let next_order: i64 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(sort_order), 0) + 1000 FROM workspaces",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(1000);
 
         let id = Uuid::new_v4();
         let ws = Workspace {
@@ -71,15 +102,18 @@ impl WorkspaceService {
             detected_branch: None,
             dangerous_skip_permissions,
             has_prior_session: false,
+            project_id,
+            sort_order: next_order,
         };
 
-        let conn = self.db.lock().unwrap();
         tessera_store::workspaces::insert(&conn, &ws)?;
 
         tracing::info!(
             id = %ws.id,
             name = %ws.name,
             dangerous = ws.dangerous_skip_permissions,
+            project_id = ?ws.project_id,
+            sort_order = ws.sort_order,
             "workspace created",
         );
         Ok(ws)
@@ -227,6 +261,60 @@ impl WorkspaceService {
         )
     }
 
+    // ---- Projects ----
+
+    pub fn create_project(&self, name: &str, accent: Option<String>) -> Result<Project> {
+        anyhow::ensure!(!name.trim().is_empty(), "project name is required");
+        if let Some(ref hex) = accent {
+            anyhow::ensure!(is_valid_hex_color(hex), "accent must be \"#RRGGBB\"");
+        }
+        let project = Project {
+            id: Uuid::new_v4(),
+            name: name.to_string(),
+            accent,
+            created_at: chrono::Utc::now(),
+        };
+        let conn = self.db.lock().unwrap();
+        tessera_store::projects::insert(&conn, &project)?;
+        tracing::info!(id = %project.id, name = %project.name, "project created");
+        Ok(project)
+    }
+
+    pub fn list_projects(&self) -> Result<Vec<Project>> {
+        let conn = self.db.lock().unwrap();
+        tessera_store::projects::list(&conn)
+    }
+
+    /// Delete a project. Workspaces that pointed at it stay alive — the
+    /// FK is `ON DELETE SET NULL`, so they become ungrouped.
+    pub fn delete_project(&self, id: Uuid) -> Result<()> {
+        let conn = self.db.lock().unwrap();
+        tessera_store::projects::delete(&conn, id)
+    }
+
+    /// Apply a batch of sort-order updates (UUID -> new sort_order). Runs
+    /// in a single SQLite transaction.
+    pub fn reorder_workspaces(&self, updates: Vec<(Uuid, i64)>) -> Result<()> {
+        let conn = self.db.lock().unwrap();
+        tessera_store::workspaces::update_sort_orders(&conn, &updates)
+    }
+
+    /// Move a workspace into a project (or out, when `project_id` is `None`).
+    pub fn assign_project(
+        &self,
+        workspace_id: Uuid,
+        project_id: Option<Uuid>,
+    ) -> Result<()> {
+        let conn = self.db.lock().unwrap();
+        if let Some(pid) = project_id {
+            anyhow::ensure!(
+                tessera_store::projects::get(&conn, pid)?.is_some(),
+                "project {pid} not found",
+            );
+        }
+        tessera_store::workspaces::update_project(&conn, workspace_id, project_id)
+    }
+
     /// Write `<folder>/.claude/settings.local.json` so Claude Code calls back
     /// into our binary when its lifecycle hooks fire. In Plan 5 this is the
     /// user's source folder (== workspace.worktree_path), not a worktree we
@@ -296,19 +384,21 @@ mod tests {
         let (svc, dir) = make_service();
         let folder = dir.path().join("any-folder");
         std::fs::create_dir_all(&folder).unwrap();
-        let ws = svc.create(&folder, "Login work", false).unwrap();
+        let ws = svc.create(&folder, "Login work", false, None).unwrap();
         assert_eq!(ws.name, "Login work");
         assert_eq!(ws.worktree_path, folder);
         assert_eq!(ws.branch, "");
         assert_eq!(ws.detected_worktree, None);
+        assert_eq!(ws.project_id, None);
+        assert!(ws.sort_order > 0);
         assert_eq!(svc.list().unwrap().len(), 1);
     }
 
     #[test]
     fn create_empty_name_errors() {
         let (svc, dir) = make_service();
-        assert!(svc.create(dir.path(), "", false).is_err());
-        assert!(svc.create(dir.path(), "   ", false).is_err());
+        assert!(svc.create(dir.path(), "", false, None).is_err());
+        assert!(svc.create(dir.path(), "   ", false, None).is_err());
         assert!(svc.list().unwrap().is_empty());
     }
 
@@ -324,7 +414,7 @@ mod tests {
         let (svc, dir) = make_service();
         let folder = dir.path().join("any-folder");
         std::fs::create_dir_all(&folder).unwrap();
-        let ws = svc.create(&folder, "P", false).unwrap();
+        let ws = svc.create(&folder, "P", false, None).unwrap();
         svc.set_status(ws.id, AgentStatus::Working);
         assert_eq!(svc.status_of(ws.id), Some(AgentStatus::Working));
     }
@@ -334,7 +424,7 @@ mod tests {
         let (svc, dir) = make_service();
         let folder = dir.path().join("any-folder");
         std::fs::create_dir_all(&folder).unwrap();
-        let ws = svc.create(&folder, "x", false).unwrap();
+        let ws = svc.create(&folder, "x", false, None).unwrap();
         let exe = std::path::PathBuf::from("/abs/path/to/tessera");
         svc.install_hooks(&folder, ws.id, &exe).unwrap();
         let path = folder.join(".claude/settings.local.json");
@@ -354,7 +444,7 @@ mod tests {
         let (svc, dir) = make_service();
         let folder = dir.path().join("any-folder");
         std::fs::create_dir_all(&folder).unwrap();
-        let ws = svc.create(&folder, "x", false).unwrap();
+        let ws = svc.create(&folder, "x", false, None).unwrap();
         svc.delete(ws.id, true).unwrap();
         assert!(folder.exists(), "user folder must not be removed");
         assert!(svc.list().unwrap().is_empty());
@@ -372,7 +462,7 @@ mod tests {
         let (svc, dir) = make_service();
         let folder = dir.path().join("any-folder");
         std::fs::create_dir_all(&folder).unwrap();
-        let ws = svc.create(&folder, "x", false).unwrap();
+        let ws = svc.create(&folder, "x", false, None).unwrap();
 
         svc.set_detected_worktree(
             ws.id,
@@ -395,10 +485,94 @@ mod tests {
         let (svc, dir) = make_service();
         let folder = dir.path().join("any-folder");
         std::fs::create_dir_all(&folder).unwrap();
-        let ws = svc.create(&folder, "x", false).unwrap();
+        let ws = svc.create(&folder, "x", false, None).unwrap();
         let sid = svc
             .spawn_agent_with_program(ws.id, "cat", &[], 80, 24)
             .unwrap();
         assert_eq!(svc.current_session(ws.id), Some(sid));
+    }
+
+    #[test]
+    fn create_project_and_list() {
+        let (svc, _dir) = make_service();
+        let p = svc
+            .create_project("Front-end", Some("#C8825B".into()))
+            .unwrap();
+        assert_eq!(p.name, "Front-end");
+        let all = svc.list_projects().unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].id, p.id);
+    }
+
+    #[test]
+    fn create_project_rejects_bad_hex() {
+        let (svc, _dir) = make_service();
+        assert!(svc.create_project("x", Some("C8825B".into())).is_err());
+        assert!(svc.create_project("x", Some("#ZZZ".into())).is_err());
+        assert!(svc.create_project("", None).is_err());
+    }
+
+    #[test]
+    fn delete_project_unlinks_workspaces_but_keeps_them() {
+        let (svc, dir) = make_service();
+        let folder = dir.path().join("any-folder");
+        std::fs::create_dir_all(&folder).unwrap();
+        let p = svc.create_project("p", None).unwrap();
+        let ws = svc.create(&folder, "w", false, Some(p.id)).unwrap();
+        assert_eq!(ws.project_id, Some(p.id));
+
+        svc.delete_project(p.id).unwrap();
+        assert!(svc.list_projects().unwrap().is_empty());
+        let listed = svc.list().unwrap();
+        let row = listed.iter().find(|w| w.id == ws.id).unwrap();
+        assert_eq!(row.project_id, None);
+    }
+
+    #[test]
+    fn reorder_workspaces_persists() {
+        let (svc, dir) = make_service();
+        let folder = dir.path().join("any-folder");
+        std::fs::create_dir_all(&folder).unwrap();
+        let a = svc.create(&folder, "a", false, None).unwrap();
+        let b = svc.create(&folder, "b", false, None).unwrap();
+        // Force b ahead of a by lowering its sort_order.
+        svc.reorder_workspaces(vec![(a.id, 5_000), (b.id, 100)])
+            .unwrap();
+        let listed = svc.list().unwrap();
+        assert_eq!(listed[0].id, b.id);
+        assert_eq!(listed[1].id, a.id);
+    }
+
+    #[test]
+    fn assign_project_moves_workspace() {
+        let (svc, dir) = make_service();
+        let folder = dir.path().join("any-folder");
+        std::fs::create_dir_all(&folder).unwrap();
+        let p = svc.create_project("p", None).unwrap();
+        let ws = svc.create(&folder, "w", false, None).unwrap();
+        assert_eq!(ws.project_id, None);
+        svc.assign_project(ws.id, Some(p.id)).unwrap();
+        let row = svc.list().unwrap().into_iter().find(|w| w.id == ws.id).unwrap();
+        assert_eq!(row.project_id, Some(p.id));
+        svc.assign_project(ws.id, None).unwrap();
+        let row = svc.list().unwrap().into_iter().find(|w| w.id == ws.id).unwrap();
+        assert_eq!(row.project_id, None);
+    }
+
+    #[test]
+    fn assign_project_rejects_unknown_project() {
+        let (svc, dir) = make_service();
+        let folder = dir.path().join("any-folder");
+        std::fs::create_dir_all(&folder).unwrap();
+        let ws = svc.create(&folder, "w", false, None).unwrap();
+        assert!(svc.assign_project(ws.id, Some(Uuid::new_v4())).is_err());
+    }
+
+    #[test]
+    fn create_workspace_rejects_unknown_project() {
+        let (svc, dir) = make_service();
+        let folder = dir.path().join("any-folder");
+        std::fs::create_dir_all(&folder).unwrap();
+        assert!(svc.create(&folder, "w", false, Some(Uuid::new_v4())).is_err());
     }
 }

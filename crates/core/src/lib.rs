@@ -6,7 +6,7 @@ pub mod workspace;
 
 pub use error::CoreError;
 pub use session::{AgentSession, AgentStatus};
-pub use workspace::{SetupStatus, Workspace};
+pub use workspace::{Project, SetupStatus, Workspace};
 
 #[cfg(test)]
 mod tests {
@@ -29,6 +29,8 @@ mod tests {
             detected_branch: None,
             dangerous_skip_permissions: false,
             has_prior_session: false,
+            project_id: None,
+            sort_order: 0,
         };
         let j = serde_json::to_string(&ws).unwrap();
         let back: Workspace = serde_json::from_str(&j).unwrap();

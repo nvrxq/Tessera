@@ -152,6 +152,8 @@ pub struct WorkspaceDto {
     pub dangerous_skip_permissions: bool,
     pub session_id: Option<Uuid>,
     pub agent_status: Option<tessera_core::AgentStatus>,
+    pub project_id: Option<Uuid>,
+    pub sort_order: i64,
 }
 
 impl WorkspaceDto {
@@ -172,6 +174,27 @@ impl WorkspaceDto {
             dangerous_skip_permissions: ws.dangerous_skip_permissions,
             session_id,
             agent_status,
+            project_id: ws.project_id,
+            sort_order: ws.sort_order,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProjectDto {
+    pub id: Uuid,
+    pub name: String,
+    pub accent: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+impl From<tessera_core::Project> for ProjectDto {
+    fn from(p: tessera_core::Project) -> Self {
+        Self {
+            id: p.id,
+            name: p.name,
+            accent: p.accent,
+            created_at: p.created_at,
         }
     }
 }
@@ -182,6 +205,18 @@ pub struct CreateWorkspaceArgs {
     pub name: String,
     #[serde(default)]
     pub dangerous_skip_permissions: bool,
+    #[serde(default)]
+    pub project_id: Option<Uuid>,
+}
+
+/// One row of a workspace_reorder request. We use a named struct (rather
+/// than `Vec<(Uuid, i64)>`) so the JSON wire shape is self-describing —
+/// `[{"workspace_id": "...", "sort_order": 100}, ...]` — and the
+/// TypeScript bindings end up readable.
+#[derive(Debug, Deserialize)]
+pub struct ReorderEntry {
+    pub workspace_id: Uuid,
+    pub sort_order: i64,
 }
 
 #[tauri::command]
@@ -194,6 +229,7 @@ pub fn workspace_create(
             &args.folder_path,
             &args.name,
             args.dangerous_skip_permissions,
+            args.project_id,
         )
         .map_err(|e| e.to_string())?;
 
@@ -243,6 +279,61 @@ pub fn workspace_delete(
     force: bool,
 ) -> Result<(), String> {
     state.delete(workspace_id, force).map_err(|e| e.to_string())
+}
+
+// ---- Projects & ordering ----
+
+#[tauri::command]
+pub fn project_create(
+    state: State<'_, WorkspaceServiceState>,
+    name: String,
+    accent: Option<String>,
+) -> Result<ProjectDto, String> {
+    state
+        .create_project(&name, accent)
+        .map(ProjectDto::from)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn project_list(
+    state: State<'_, WorkspaceServiceState>,
+) -> Result<Vec<ProjectDto>, String> {
+    state
+        .list_projects()
+        .map(|v| v.into_iter().map(ProjectDto::from).collect())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn project_delete(
+    state: State<'_, WorkspaceServiceState>,
+    id: Uuid,
+) -> Result<(), String> {
+    state.delete_project(id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn workspace_reorder(
+    state: State<'_, WorkspaceServiceState>,
+    updates: Vec<ReorderEntry>,
+) -> Result<(), String> {
+    let pairs: Vec<(Uuid, i64)> = updates
+        .into_iter()
+        .map(|e| (e.workspace_id, e.sort_order))
+        .collect();
+    state.reorder_workspaces(pairs).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn workspace_assign_project(
+    state: State<'_, WorkspaceServiceState>,
+    workspace_id: Uuid,
+    project_id: Option<Uuid>,
+) -> Result<(), String> {
+    state
+        .assign_project(workspace_id, project_id)
+        .map_err(|e| e.to_string())
 }
 
 // ---- Terminal grid (Canvas2D backend) ----

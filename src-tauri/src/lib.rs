@@ -210,6 +210,11 @@ pub fn run() {
             commands::workspace_list,
             commands::workspace_spawn_agent,
             commands::workspace_delete,
+            commands::project_create,
+            commands::project_list,
+            commands::project_delete,
+            commands::workspace_reorder,
+            commands::workspace_assign_project,
             commands::terminal_resize,
             commands::list_directories,
         ])

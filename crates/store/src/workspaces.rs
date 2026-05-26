@@ -10,8 +10,9 @@ pub fn insert(conn: &Connection, ws: &Workspace) -> Result<()> {
     conn.execute(
         "INSERT INTO workspaces \
             (id, name, repo_path, worktree_path, branch, created_at, setup_status, \
-             detected_worktree, detected_branch, dangerous_skip_permissions, has_prior_session) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+             detected_worktree, detected_branch, dangerous_skip_permissions, has_prior_session, \
+             project_id, sort_order) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         params![
             ws.id.to_string(),
             ws.name,
@@ -26,6 +27,8 @@ pub fn insert(conn: &Connection, ws: &Workspace) -> Result<()> {
             ws.detected_branch,
             ws.dangerous_skip_permissions as i64,
             ws.has_prior_session as i64,
+            ws.project_id.map(|p| p.to_string()),
+            ws.sort_order,
         ],
     )?;
     Ok(())
@@ -34,7 +37,8 @@ pub fn insert(conn: &Connection, ws: &Workspace) -> Result<()> {
 pub fn get(conn: &Connection, id: Uuid) -> Result<Option<Workspace>> {
     conn.query_row(
         "SELECT id, name, repo_path, worktree_path, branch, created_at, setup_status, \
-                detected_worktree, detected_branch, dangerous_skip_permissions, has_prior_session \
+                detected_worktree, detected_branch, dangerous_skip_permissions, has_prior_session, \
+                project_id, sort_order \
          FROM workspaces WHERE id = ?1",
         params![id.to_string()],
         row_to_workspace,
@@ -46,11 +50,42 @@ pub fn get(conn: &Connection, id: Uuid) -> Result<Option<Workspace>> {
 pub fn list(conn: &Connection) -> Result<Vec<Workspace>> {
     let mut stmt = conn.prepare(
         "SELECT id, name, repo_path, worktree_path, branch, created_at, setup_status, \
-                detected_worktree, detected_branch, dangerous_skip_permissions, has_prior_session \
-         FROM workspaces ORDER BY created_at DESC",
+                detected_worktree, detected_branch, dangerous_skip_permissions, has_prior_session, \
+                project_id, sort_order \
+         FROM workspaces ORDER BY sort_order ASC, created_at ASC",
     )?;
     let rows = stmt.query_map([], row_to_workspace)?;
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+/// Apply a batch of `(workspace_id, sort_order)` updates atomically. Unknown
+/// IDs are silently skipped so a stale frontend reorder doesn't poison the
+/// whole transaction.
+pub fn update_sort_orders(conn: &Connection, updates: &[(Uuid, i64)]) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    {
+        let mut stmt =
+            tx.prepare("UPDATE workspaces SET sort_order = ?1 WHERE id = ?2")?;
+        for (id, order) in updates {
+            stmt.execute(params![order, id.to_string()])?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// Set or clear the project a workspace belongs to. `None` un-assigns.
+pub fn update_project(
+    conn: &Connection,
+    ws_id: Uuid,
+    project_id: Option<Uuid>,
+) -> Result<()> {
+    let n = conn.execute(
+        "UPDATE workspaces SET project_id = ?1 WHERE id = ?2",
+        params![project_id.map(|p| p.to_string()), ws_id.to_string()],
+    )?;
+    anyhow::ensure!(n == 1, "workspace {ws_id} not found");
+    Ok(())
 }
 
 pub fn mark_session_started(conn: &Connection, id: Uuid) -> Result<()> {
@@ -107,6 +142,18 @@ fn row_to_workspace(row: &rusqlite::Row<'_>) -> rusqlite::Result<Workspace> {
     let detected_br: Option<String> = row.get(8)?;
     let dangerous: i64 = row.get(9)?;
     let has_prior: i64 = row.get(10)?;
+    let project_id_s: Option<String> = row.get(11)?;
+    let sort_order: i64 = row.get(12)?;
+    let project_id = match project_id_s {
+        Some(s) => Some(Uuid::parse_str(&s).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(
+                11,
+                rusqlite::types::Type::Text,
+                Box::new(e),
+            )
+        })?),
+        None => None,
+    };
     Ok(Workspace {
         id: Uuid::parse_str(&id_s).map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
@@ -131,6 +178,8 @@ fn row_to_workspace(row: &rusqlite::Row<'_>) -> rusqlite::Result<Workspace> {
         detected_branch: detected_br,
         dangerous_skip_permissions: dangerous != 0,
         has_prior_session: has_prior != 0,
+        project_id,
+        sort_order,
     })
 }
 
@@ -152,6 +201,8 @@ mod tests {
             detected_branch: None,
             dangerous_skip_permissions: false,
             has_prior_session: false,
+            project_id: None,
+            sort_order: 0,
         }
     }
 
@@ -218,5 +269,81 @@ mod tests {
         insert(&conn, &ws).unwrap();
         let got = get(&conn, ws.id).unwrap().unwrap();
         assert!(got.dangerous_skip_permissions);
+    }
+
+    #[test]
+    fn list_orders_by_sort_order_then_created_at() {
+        let conn = open_in_memory().unwrap();
+        let mut a = sample("a");
+        a.sort_order = 200;
+        let mut b = sample("b");
+        b.sort_order = 100;
+        let mut c = sample("c");
+        c.sort_order = 100;
+        // a inserted first; b and c tie on sort_order, b inserted before c
+        // so b.created_at < c.created_at and b should come first.
+        insert(&conn, &a).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        insert(&conn, &b).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        insert(&conn, &c).unwrap();
+        let all = list(&conn).unwrap();
+        let names: Vec<&str> = all.iter().map(|w| w.name.as_str()).collect();
+        assert_eq!(names, vec!["b", "c", "a"]);
+    }
+
+    #[test]
+    fn update_sort_orders_applies_atomically() {
+        let conn = open_in_memory().unwrap();
+        let a = sample("a");
+        let b = sample("b");
+        insert(&conn, &a).unwrap();
+        insert(&conn, &b).unwrap();
+        update_sort_orders(&conn, &[(a.id, 500), (b.id, 250)]).unwrap();
+        let got_a = get(&conn, a.id).unwrap().unwrap();
+        let got_b = get(&conn, b.id).unwrap().unwrap();
+        assert_eq!(got_a.sort_order, 500);
+        assert_eq!(got_b.sort_order, 250);
+    }
+
+    #[test]
+    fn update_project_sets_and_clears() {
+        let conn = open_in_memory().unwrap();
+        let ws = sample("w");
+        insert(&conn, &ws).unwrap();
+        let project = tessera_core::Project {
+            id: Uuid::new_v4(),
+            name: "p".into(),
+            accent: None,
+            created_at: Utc::now(),
+        };
+        crate::projects::insert(&conn, &project).unwrap();
+
+        update_project(&conn, ws.id, Some(project.id)).unwrap();
+        let got = get(&conn, ws.id).unwrap().unwrap();
+        assert_eq!(got.project_id, Some(project.id));
+
+        update_project(&conn, ws.id, None).unwrap();
+        let got = get(&conn, ws.id).unwrap().unwrap();
+        assert_eq!(got.project_id, None);
+    }
+
+    #[test]
+    fn deleting_project_sets_workspace_project_id_to_null() {
+        let conn = open_in_memory().unwrap();
+        let ws = sample("w");
+        insert(&conn, &ws).unwrap();
+        let project = tessera_core::Project {
+            id: Uuid::new_v4(),
+            name: "p".into(),
+            accent: None,
+            created_at: Utc::now(),
+        };
+        crate::projects::insert(&conn, &project).unwrap();
+        update_project(&conn, ws.id, Some(project.id)).unwrap();
+
+        crate::projects::delete(&conn, project.id).unwrap();
+        let got = get(&conn, ws.id).unwrap().unwrap();
+        assert_eq!(got.project_id, None);
     }
 }

@@ -1,13 +1,22 @@
-import { For, Show } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import type { Component } from "solid-js";
-import { statusLabel, type AgentStatus, type WorkspaceDto } from "./lib/workspaces";
+import {
+  statusLabel,
+  type AgentStatus,
+  type Project,
+  type WorkspaceDto,
+} from "./lib/workspaces";
+
+type SectionKey = "active" | "passive";
 
 export interface SidebarProps {
   workspaces: WorkspaceDto[];
+  projects: Project[];
   selectedId: string | null;
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
   onNew: () => void;
+  onReorder: (section: SectionKey, orderedIds: string[]) => void;
 }
 
 function statusClass(s: AgentStatus | null): string {
@@ -47,59 +56,206 @@ function subline(ws: WorkspaceDto): string {
   return ws.repo_path;
 }
 
+function sectionOf(ws: WorkspaceDto): SectionKey {
+  return ws.session_id != null ? "active" : "passive";
+}
+
+function compareWorkspaces(a: WorkspaceDto, b: WorkspaceDto): number {
+  if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order;
+  return a.created_at.localeCompare(b.created_at);
+}
+
 const Sidebar: Component<SidebarProps> = (props) => {
+  // —— drag state ——
+  // dragId: workspace id currently being dragged.
+  // dragSection: which section the drag originated in (used to gate
+  // cross-section drops — we ignore them silently per spec).
+  // overId: workspace id currently being hovered over as a drop target.
+  const [dragId, setDragId] = createSignal<string | null>(null);
+  const [dragSection, setDragSection] = createSignal<SectionKey | null>(null);
+  const [overId, setOverId] = createSignal<string | null>(null);
+
+  const projectMap = createMemo(() => {
+    const m = new Map<string, Project>();
+    for (const p of props.projects) m.set(p.id, p);
+    return m;
+  });
+
+  const sections = createMemo(() => {
+    const active: WorkspaceDto[] = [];
+    const passive: WorkspaceDto[] = [];
+    for (const ws of props.workspaces) {
+      (sectionOf(ws) === "active" ? active : passive).push(ws);
+    }
+    active.sort(compareWorkspaces);
+    passive.sort(compareWorkspaces);
+    return { active, passive };
+  });
+
+  const handleDragStart = (
+    e: DragEvent,
+    ws: WorkspaceDto,
+  ) => {
+    setDragId(ws.id);
+    setDragSection(sectionOf(ws));
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = "move";
+      // Some browsers require setData for the drag to actually fire.
+      try {
+        e.dataTransfer.setData("text/plain", ws.id);
+      } catch {
+        /* setData can throw in restricted contexts; safe to ignore. */
+      }
+    }
+  };
+
+  const handleDragOver = (
+    e: DragEvent,
+    target: WorkspaceDto,
+  ) => {
+    const src = dragId();
+    if (!src || src === target.id) return;
+    if (dragSection() !== sectionOf(target)) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    if (overId() !== target.id) setOverId(target.id);
+  };
+
+  const handleDragLeave = (target: WorkspaceDto) => {
+    if (overId() === target.id) setOverId(null);
+  };
+
+  const handleDrop = (
+    e: DragEvent,
+    target: WorkspaceDto,
+  ) => {
+    const src = dragId();
+    const section = dragSection();
+    if (!src || !section) return;
+    if (section !== sectionOf(target)) return;
+    e.preventDefault();
+    const list = section === "active" ? sections().active : sections().passive;
+    const srcIdx = list.findIndex((w) => w.id === src);
+    const dstIdx = list.findIndex((w) => w.id === target.id);
+    if (srcIdx < 0 || dstIdx < 0 || srcIdx === dstIdx) {
+      setDragId(null);
+      setDragSection(null);
+      setOverId(null);
+      return;
+    }
+    const reordered = list.slice();
+    const [moved] = reordered.splice(srcIdx, 1);
+    reordered.splice(dstIdx, 0, moved);
+    props.onReorder(section, reordered.map((w) => w.id));
+    setDragId(null);
+    setDragSection(null);
+    setOverId(null);
+  };
+
+  const handleDragEnd = () => {
+    setDragId(null);
+    setDragSection(null);
+    setOverId(null);
+  };
+
+  const renderRow = (ws: WorkspaceDto) => {
+    const project = ws.project_id ? projectMap().get(ws.project_id) ?? null : null;
+    return (
+      <li
+        class="workspace-item"
+        classList={{
+          selected: ws.id === props.selectedId,
+          "workspace-item--dragging": ws.id === dragId(),
+          "workspace-item--drop-target": ws.id === overId() && ws.id !== dragId(),
+        }}
+        draggable={true}
+        onClick={() => props.onSelect(ws.id)}
+        onDragStart={(e) => handleDragStart(e, ws)}
+        onDragOver={(e) => handleDragOver(e, ws)}
+        onDragLeave={() => handleDragLeave(ws)}
+        onDrop={(e) => handleDrop(e, ws)}
+        onDragEnd={handleDragEnd}
+      >
+        <span class={statusClass(ws.agent_status)} title={statusLabel(ws.agent_status)} />
+        <div class="workspace-meta">
+          <div class="workspace-name">
+            <ClaudeMark />
+            <span class="workspace-name-text">{ws.name}</span>
+            <Show when={project}>
+              {(p) => (
+                <span
+                  class="workspace-project-chip"
+                  title={`Project: ${p().name}`}
+                  style={
+                    p().accent
+                      ? {
+                          "background-color": `${p().accent}2E`,
+                          color: p().accent ?? undefined,
+                        }
+                      : undefined
+                  }
+                >
+                  {p().name.toLowerCase()}
+                </span>
+              )}
+            </Show>
+            <Show when={ws.dangerous_skip_permissions}>
+              <span class="dangerous-badge" title="--dangerously-skip-permissions">⚡</span>
+            </Show>
+          </div>
+          <div class="workspace-substack">
+            <span class={statusLabelClass(ws.agent_status)}>
+              {statusLabel(ws.agent_status)}
+            </span>
+            <span class="workspace-branch">{subline(ws)}</span>
+          </div>
+        </div>
+        <button
+          type="button"
+          class="workspace-delete"
+          title="Delete workspace"
+          onClick={(e) => {
+            e.stopPropagation();
+            if (
+              confirm(
+                `Delete workspace "${ws.name}"? The DB row is removed; on-disk files are left alone.`,
+              )
+            ) {
+              props.onDelete(ws.id);
+            }
+          }}
+        >
+          ×
+        </button>
+      </li>
+    );
+  };
+
   return (
     <aside class="sidebar">
       <div class="sidebar-head">
         <span>Workspaces</span>
         <button type="button" onClick={props.onNew} title="New workspace">+</button>
       </div>
-      <ul class="workspace-list">
+      <div class="workspace-sections">
         <Show
           when={props.workspaces.length > 0}
-          fallback={<li class="workspace-empty">No workspaces yet</li>}
+          fallback={<div class="workspace-empty">No workspaces yet</div>}
         >
-          <For each={props.workspaces}>
-            {(ws) => (
-              <li
-                class="workspace-item"
-                classList={{ selected: ws.id === props.selectedId }}
-                onClick={() => props.onSelect(ws.id)}
-              >
-                <span class={statusClass(ws.agent_status)} title={statusLabel(ws.agent_status)} />
-                <div class="workspace-meta">
-                  <div class="workspace-name">
-                    <ClaudeMark />
-                    <span class="workspace-name-text">{ws.name}</span>
-                    <Show when={ws.dangerous_skip_permissions}>
-                      <span class="dangerous-badge" title="--dangerously-skip-permissions">⚡</span>
-                    </Show>
-                  </div>
-                  <div class="workspace-substack">
-                    <span class={statusLabelClass(ws.agent_status)}>
-                      {statusLabel(ws.agent_status)}
-                    </span>
-                    <span class="workspace-branch">{subline(ws)}</span>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  class="workspace-delete"
-                  title="Delete workspace"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (confirm(`Delete workspace "${ws.name}"? The DB row is removed; on-disk files are left alone.`)) {
-                      props.onDelete(ws.id);
-                    }
-                  }}
-                >
-                  ×
-                </button>
-              </li>
-            )}
-          </For>
+          <Show when={sections().active.length > 0}>
+            <div class="workspace-section-header">Active</div>
+            <ul class="workspace-list">
+              <For each={sections().active}>{renderRow}</For>
+            </ul>
+          </Show>
+          <Show when={sections().passive.length > 0}>
+            <div class="workspace-section-header">Passive</div>
+            <ul class="workspace-list">
+              <For each={sections().passive}>{renderRow}</For>
+            </ul>
+          </Show>
         </Show>
-      </ul>
+      </div>
       <button type="button" class="sidebar-newbutton" onClick={props.onNew} title="New workspace">
         <span class="sidebar-newbutton-circle">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none">

@@ -1,11 +1,37 @@
 import { createSignal, For, Show } from "solid-js";
 import type { Component } from "solid-js";
-import { createWorkspace, listDirectories, type WorkspaceDto } from "./lib/workspaces";
+import {
+  createProject,
+  createWorkspace,
+  listDirectories,
+  type Project,
+  type WorkspaceDto,
+} from "./lib/workspaces";
 
 export interface NewWorkspaceFormProps {
+  projects: Project[];
   onCreated: (ws: WorkspaceDto) => void;
   onCancel: () => void;
+  onProjectsChanged: () => void;
 }
+
+// Sentinel project-select values. Real project ids are uuids so these
+// can't collide with them.
+const PROJECT_NONE = "__none__";
+const PROJECT_NEW = "__new__";
+
+// A small terracotta-family palette for the inline "new project" colour
+// picker. Built around --accent (#C8825B) at varying warmth — no neon,
+// no off-palette tones. `null` means "no accent" (chip falls back to
+// --accent-soft).
+const PROJECT_SWATCHES: Array<{ value: string | null; label: string }> = [
+  { value: null, label: "Default" },
+  { value: "#C8825B", label: "Terracotta" },
+  { value: "#B16E48", label: "Sienna" },
+  { value: "#D89568", label: "Apricot" },
+  { value: "#A66A4A", label: "Russet" },
+  { value: "#E1A47A", label: "Sand" },
+];
 
 const NewWorkspaceForm: Component<NewWorkspaceFormProps> = (props) => {
   const [name, setName] = createSignal("");
@@ -13,6 +39,15 @@ const NewWorkspaceForm: Component<NewWorkspaceFormProps> = (props) => {
   const [dangerous, setDangerous] = createSignal(false);
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
+
+  // —— project selection ——
+  // projectSel holds either an existing project id, PROJECT_NONE, or
+  // PROJECT_NEW. When PROJECT_NEW is selected we reveal an inline name +
+  // colour swatch row; on submit we create the project first, then the
+  // workspace.
+  const [projectSel, setProjectSel] = createSignal<string>(PROJECT_NONE);
+  const [newProjectName, setNewProjectName] = createSignal("");
+  const [newProjectAccent, setNewProjectAccent] = createSignal<string | null>(null);
 
   // —— autocomplete state ——
   const [suggestions, setSuggestions] = createSignal<string[]>([]);
@@ -81,10 +116,29 @@ const NewWorkspaceForm: Component<NewWorkspaceFormProps> = (props) => {
   const submit = async (e: Event) => {
     e.preventDefault();
     if (!name().trim() || !folderPath().trim()) return;
+    // If user picked "new project" but didn't name it, treat as None.
+    const wantsNewProject =
+      projectSel() === PROJECT_NEW && newProjectName().trim().length > 0;
     setBusy(true);
     setError(null);
     try {
-      const ws = await createWorkspace(folderPath().trim(), name().trim(), dangerous());
+      let projectId: string | null = null;
+      if (wantsNewProject) {
+        const created = await createProject(
+          newProjectName().trim(),
+          newProjectAccent(),
+        );
+        projectId = created.id;
+        props.onProjectsChanged();
+      } else if (projectSel() !== PROJECT_NONE && projectSel() !== PROJECT_NEW) {
+        projectId = projectSel();
+      }
+      const ws = await createWorkspace(
+        folderPath().trim(),
+        name().trim(),
+        dangerous(),
+        projectId,
+      );
       props.onCreated(ws);
     } catch (err) {
       setError(String(err));
@@ -148,6 +202,59 @@ const NewWorkspaceForm: Component<NewWorkspaceFormProps> = (props) => {
           </Show>
         </div>
       </label>
+
+      <label>
+        <span>Project</span>
+        <select
+          class="project-select"
+          value={projectSel()}
+          onChange={(e) => setProjectSel(e.currentTarget.value)}
+        >
+          <option value={PROJECT_NONE}>None</option>
+          <For each={props.projects}>
+            {(p) => <option value={p.id}>{p.name}</option>}
+          </For>
+          <option value={PROJECT_NEW}>+ New project…</option>
+        </select>
+      </label>
+
+      <Show when={projectSel() === PROJECT_NEW}>
+        <div class="new-project-row">
+          <input
+            type="text"
+            class="new-project-name"
+            placeholder="tessera"
+            value={newProjectName()}
+            onInput={(e) => setNewProjectName(e.currentTarget.value)}
+            autocomplete="off"
+            spellcheck={false}
+          />
+          <div class="swatch-row" role="radiogroup" aria-label="Project colour">
+            <For each={PROJECT_SWATCHES}>
+              {(sw) => (
+                <button
+                  type="button"
+                  class="swatch"
+                  classList={{ "swatch--selected": newProjectAccent() === sw.value }}
+                  title={sw.label}
+                  aria-label={sw.label}
+                  style={
+                    sw.value
+                      ? { "background-color": sw.value }
+                      : undefined
+                  }
+                  onClick={() => setNewProjectAccent(sw.value)}
+                >
+                  <Show when={!sw.value}>
+                    <span class="swatch-none">∅</span>
+                  </Show>
+                </button>
+              )}
+            </For>
+          </div>
+        </div>
+      </Show>
+
       <label class="checkbox-row">
         <input
           type="checkbox"
