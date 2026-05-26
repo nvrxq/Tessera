@@ -83,6 +83,20 @@ export function workspaceAssignProject(
   return invoke<void>("workspace_assign_project", { workspaceId, projectId });
 }
 
+/** Curated set of accent swatches for project creation. Single source of
+ *  truth so the modal in ProjectsSettings.tsx and the inline picker in
+ *  NewWorkspaceForm.tsx stay visually aligned. Order is intentional
+ *  (warm → cool, default first). `null` means "no accent — fall back to
+ *  the global terracotta". */
+export const PROJECT_SWATCHES: Array<{ label: string; value: string | null }> = [
+  { label: "Default", value: null },
+  { label: "Terracotta", value: "#C8825B" },
+  { label: "Sienna", value: "#A85A3C" },
+  { label: "Apricot", value: "#E0A370" },
+  { label: "Russet", value: "#8C4A2E" },
+  { label: "Sand", value: "#C9B58B" },
+];
+
 export function listWorkspaces(): Promise<WorkspaceDto[]> {
   return invoke<WorkspaceDto[]>("workspace_list");
 }

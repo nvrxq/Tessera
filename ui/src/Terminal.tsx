@@ -53,6 +53,20 @@ export default function Terminal(props: TerminalProps) {
   let unlisten: UnlistenFn | null = null;
   let activeSessionId: string | null = props.sessionId;
 
+  /** Swap the active session and drop any snapshots still queued for the
+   *  previous one. Without this, a delta sitting in `pendingSnaps` from
+   *  the old session could be drained in the next rAF and applied (or
+   *  worse, used as `startIdx` reference) against the new session's
+   *  freshly-baselined grid. The inner session_id guard at apply-time
+   *  catches mismatches, but it does NOT prevent stale items from
+   *  influencing the "find latest full" scan. Cleanest fix: clear on
+   *  switch and gate every write to `activeSessionId` through here. */
+  const setActiveSession = (sid: string | null) => {
+    if (sid === activeSessionId) return;
+    activeSessionId = sid;
+    pendingSnaps.length = 0;
+  };
+
   // Local grid mirror — flat row-major Array(cols*rows). Updated on every
   // snapshot (full → overwrite, delta → patch). Paints read from here so
   // partial-redraw paths don't have to touch the wire payload at all.
@@ -123,10 +137,27 @@ export default function Terminal(props: TerminalProps) {
   function resizeCanvasBacking() {
     const r = host.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.max(1, Math.round(r.width * dpr));
-    canvas.height = Math.max(1, Math.round(r.height * dpr));
+    const newW = Math.max(1, Math.round(r.width * dpr));
+    const newH = Math.max(1, Math.round(r.height * dpr));
+    // Assigning to canvas.width/height ALWAYS clears the canvas — even
+    // when the value is unchanged. That was the root cause of the flicker:
+    // every ResizeObserver tick (which fires on sub-pixel layout shifts —
+    // scrollbar appearance, focus rings, anim frames) would wipe the
+    // grid and we'd briefly see black until the next snapshot painted.
+    // Skip the assignment when the backing store already matches.
+    const dimsChanged = canvas.width !== newW || canvas.height !== newH;
+    if (dimsChanged) {
+      canvas.width = newW;
+      canvas.height = newH;
+    }
     canvas.style.width = `${r.width}px`;
     canvas.style.height = `${r.height}px`;
+    // If we DID resize, the canvas is now blank. Repaint immediately
+    // from the local grid mirror so there's no black-flash window
+    // between the resize and the next `term_snapshot` arrival.
+    if (dimsChanged && grid.length > 0) {
+      paintFull(fontPx * dpr);
+    }
   }
 
   function hexColor(rgb: number): string {
@@ -415,7 +446,18 @@ export default function Terminal(props: TerminalProps) {
   // welcome screen) would then be dropped on the floor and the canvas
   // would stay black until something forced another emit. `listenerReady`
   // gates spawning so the first snapshot always lands.
-  let pendingSnap: Snapshot | null = null;
+  // Snapshot queue: when claude streams output, the backend can emit
+  // multiple snapshots before our rAF callback fires. The previous
+  // single-slot design dropped intermediate deltas — `pendingSnap = snap`
+  // overwrote unapplied deltas, causing the local grid to drift out of
+  // sync with backend state (visible as cell glitches / flicker).
+  //
+  // The queue keeps every snapshot in arrival order. In the rAF callback
+  // we scan from the end for the latest `full` snapshot — everything
+  // before it is necessarily stale (a full subsumes prior deltas) — and
+  // apply from there onward. Worst case per frame: 1 full + N deltas;
+  // typical case for typing-echo: 1 delta.
+  const pendingSnaps: Snapshot[] = [];
   let rafQueued = false;
   const bench = (window as unknown as { __TESSERA_BENCH?: boolean })
     .__TESSERA_BENCH === true;
@@ -427,54 +469,49 @@ export default function Terminal(props: TerminalProps) {
     const tRecv = performance.now();
     const snap = event.payload;
     if (snap.session_id !== activeSessionId) return;
-    // Coalesce policy: when a delta arrives for the same session as a
-    // pending full, merge the delta INTO the full's cells instead of
-    // letting the delta clobber it. Without this, a backend sequence
-    // of (full, delta, delta, …) for the same frame collapses to just
-    // the last delta, which then applies to an uninitialised local
-    // grid → silent black screen.
-    if (
-      pendingSnap &&
-      pendingSnap.session_id === snap.session_id &&
-      pendingSnap.full &&
-      !snap.full
-    ) {
-      const cells = pendingSnap.cells.slice();
-      for (let i = 0; i < snap.positions.length; i++) {
-        cells[snap.positions[i]] = snap.cells[i];
-      }
-      pendingSnap = {
-        ...pendingSnap,
-        cells,
-        cursor_col: snap.cursor_col,
-        cursor_row: snap.cursor_row,
-        cursor_visible: snap.cursor_visible,
-        cursor_shape: snap.cursor_shape,
-      };
-    } else {
-      pendingSnap = snap;
-    }
+    pendingSnaps.push(snap);
     if (rafQueued) return;
     rafQueued = true;
     const tQueued = performance.now();
     requestAnimationFrame(() => {
       rafQueued = false;
       const tRafFired = performance.now();
-      const s = pendingSnap;
-      pendingSnap = null;
-      if (s && s.session_id === activeSessionId) {
-        applySnapshot(s);
-        if (bench) {
-          const tPainted = performance.now();
-          const keyAge = lastKeydownAt > 0 ? tRecv - lastKeydownAt : -1;
-          console.log(
-            `[bench JS] keydown→recv=${keyAge.toFixed(1)}ms ` +
-              `recv→raf=${(tRafFired - tQueued).toFixed(1)}ms ` +
-              `paint=${(tPainted - tRafFired).toFixed(1)}ms ` +
-              `cells=${s.full ? `full(${s.cells.length})` : `delta(${s.cells.length})`} ` +
-              `total=${(tPainted - lastKeydownAt).toFixed(1)}ms`,
-          );
+      // Drain the queue into a local slice so further events while we
+      // paint go into the next frame.
+      const queue = pendingSnaps.splice(0);
+      // Skip stale snapshots that precede the latest `full` — a full
+      // re-baselines the entire grid so anything before it is wasted
+      // paint work and (more importantly) would be applied to a grid
+      // sized for the new dims.
+      let startIdx = 0;
+      for (let i = queue.length - 1; i >= 0; i--) {
+        if (queue[i].full) {
+          startIdx = i;
+          break;
         }
+      }
+      let painted = 0;
+      let cellsTotal = 0;
+      let sawFull = false;
+      for (let i = startIdx; i < queue.length; i++) {
+        const s = queue[i];
+        if (s.session_id !== activeSessionId) continue;
+        applySnapshot(s);
+        painted += 1;
+        cellsTotal += s.cells.length;
+        if (s.full) sawFull = true;
+      }
+      if (bench && painted > 0) {
+        const tPainted = performance.now();
+        const keyAge = lastKeydownAt > 0 ? tRecv - lastKeydownAt : -1;
+        console.log(
+          `[bench JS] keydown→recv=${keyAge.toFixed(1)}ms ` +
+            `recv→raf=${(tRafFired - tQueued).toFixed(1)}ms ` +
+            `paint=${(tPainted - tRafFired).toFixed(1)}ms ` +
+            `snaps=${painted}(${sawFull ? "+full" : "delta"}) ` +
+            `cells=${cellsTotal} ` +
+            `total=${(tPainted - lastKeydownAt).toFixed(1)}ms`,
+        );
       }
     });
   });
@@ -548,7 +585,7 @@ export default function Terminal(props: TerminalProps) {
       setPhase(sid ? "connecting" : "spawning");
     }
     if (sid) {
-      activeSessionId = sid;
+      setActiveSession(sid);
       if (phase() === "spawning") setPhase("connecting");
       void syncGrid();
       return;
@@ -574,7 +611,7 @@ export default function Terminal(props: TerminalProps) {
         // Both `activeSessionId` adoption AND the parent callback must
         // be gated by the workspace-still-matches invariant.
         if (props.workspaceId === ws) {
-          activeSessionId = newSid;
+          setActiveSession(newSid);
           setPhase("connecting");
           await invoke("terminal_resize", { sessionId: newSid, cols, rows });
           props.onSpawned(newSid);

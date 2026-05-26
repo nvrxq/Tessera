@@ -1,14 +1,18 @@
 import { createResource, createSignal, onCleanup, onMount, Show, type Component } from "solid-js";
 import Sidebar from "./Sidebar";
 import NewWorkspaceForm from "./NewWorkspaceForm";
+import ProjectsSettings from "./ProjectsSettings";
 import Terminal from "./Terminal";
 import {
+  createProject,
+  deleteProject,
   deleteWorkspace,
   listProjects,
   listWorkspaces,
   onWorkspaceStatus,
   onWorkspaceWorktree,
   spawnAgent,
+  workspaceAssignProject,
   workspaceReorder,
   type Project,
   type WorkspaceDto,
@@ -48,6 +52,7 @@ const App: Component = () => {
     createResource<Project[]>(listProjects);
   const [selectedId, setSelectedId] = createSignal<string | null>(null);
   const [showNew, setShowNew] = createSignal(false);
+  const [showProjects, setShowProjects] = createSignal(false);
   const clock = useClock();
   const [theme, setTheme] = createSignal<Theme>(initialTheme());
   applyTheme(theme());
@@ -162,6 +167,43 @@ const App: Component = () => {
     refetchProjects();
   };
 
+  /** Workspace's 3-dot menu → "assign project". Optimistic mutate so the
+   *  chip swap feels instant; on backend failure we refetch the list. */
+  const onAssignProject = async (
+    workspaceId: string,
+    projectId: string | null,
+  ) => {
+    mutate((list) =>
+      list?.map((w) =>
+        w.id === workspaceId ? { ...w, project_id: projectId } : w,
+      ) ?? list,
+    );
+    try {
+      await workspaceAssignProject(workspaceId, projectId);
+    } catch (e) {
+      console.error("workspace_assign_project failed", e);
+      refetch();
+    }
+  };
+
+  /** ProjectsSettings → create. We refresh the projects list on success
+   *  so the new entry shows up everywhere it's used (Sidebar chips,
+   *  3-dot menus, NewWorkspaceForm dropdown). */
+  const onCreateProject = async (name: string, accent: string | null) => {
+    await createProject(name, accent);
+    refetchProjects();
+  };
+
+  /** ProjectsSettings → delete. The backend FK on workspaces.project_id
+   *  is ON DELETE SET NULL, so any workspace still pointing at this
+   *  project ends up un-assigned. We refetch BOTH lists so chips
+   *  disappear from those workspaces immediately. */
+  const onDeleteProject = async (id: string) => {
+    await deleteProject(id);
+    refetchProjects();
+    refetch();
+  };
+
   const onDelete = async (id: string) => {
     try {
       await deleteWorkspace(id, true);
@@ -203,6 +245,23 @@ const App: Component = () => {
             <button
               type="button"
               class="topmeta-mode"
+              onClick={() => setShowProjects(true)}
+              title="Projects"
+              aria-label="Open projects settings"
+            >
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true">
+                <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.6" />
+                <path
+                  d="M19.4 13a7.5 7.5 0 0 0 0-2l2-1.5-2-3.5-2.4 1a7.6 7.6 0 0 0-1.7-1L14.5 3h-5L9 6a7.6 7.6 0 0 0-1.7 1l-2.4-1-2 3.5L4.6 11a7.5 7.5 0 0 0 0 2L2.6 14.5l2 3.5 2.4-1c.52.4 1.1.74 1.7 1l.5 3h5l.5-3c.6-.26 1.18-.6 1.7-1l2.4 1 2-3.5L19.4 13z"
+                  stroke="currentColor"
+                  stroke-width="1.4"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="topmeta-mode"
               onClick={toggleTheme}
               title={theme() === "dark" ? "Switch to light" : "Switch to dark"}
               aria-label="Toggle theme"
@@ -221,6 +280,7 @@ const App: Component = () => {
             onDelete={onDelete}
             onNew={() => setShowNew(true)}
             onReorder={onReorder}
+            onAssignProject={onAssignProject}
           />
           <main class="main-pane">
             <Show when={showNew()}>
@@ -250,6 +310,14 @@ const App: Component = () => {
           </main>
         </div>
       </div>
+      <Show when={showProjects()}>
+        <ProjectsSettings
+          projects={projects() ?? []}
+          onClose={() => setShowProjects(false)}
+          onCreate={onCreateProject}
+          onDelete={onDeleteProject}
+        />
+      </Show>
     </div>
   );
 };

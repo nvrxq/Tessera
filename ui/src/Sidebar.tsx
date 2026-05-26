@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, Show } from "solid-js";
+import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import type { Component } from "solid-js";
 import {
   statusLabel,
@@ -17,6 +17,7 @@ export interface SidebarProps {
   onDelete: (id: string) => void;
   onNew: () => void;
   onReorder: (section: SectionKey, orderedIds: string[]) => void;
+  onAssignProject: (workspaceId: string, projectId: string | null) => void;
 }
 
 function statusClass(s: AgentStatus | null): string {
@@ -74,6 +75,19 @@ const Sidebar: Component<SidebarProps> = (props) => {
   const [dragId, setDragId] = createSignal<string | null>(null);
   const [dragSection, setDragSection] = createSignal<SectionKey | null>(null);
   const [overId, setOverId] = createSignal<string | null>(null);
+
+  // Single open popover at a time — `openMenuId` holds the workspace id
+  // whose `⋯` menu is showing, or null. Outside-click handler closes it.
+  const [openMenuId, setOpenMenuId] = createSignal<string | null>(null);
+  const onDocClick = (e: MouseEvent) => {
+    // Any click outside `.workspace-menu-wrap` closes the popover.
+    const target = e.target as HTMLElement | null;
+    if (!target?.closest(".workspace-menu-wrap")) {
+      setOpenMenuId(null);
+    }
+  };
+  onMount(() => document.addEventListener("click", onDocClick, true));
+  onCleanup(() => document.removeEventListener("click", onDocClick, true));
 
   const projectMap = createMemo(() => {
     const m = new Map<string, Project>();
@@ -209,6 +223,64 @@ const Sidebar: Component<SidebarProps> = (props) => {
             </span>
             <span class="workspace-branch">{subline(ws)}</span>
           </div>
+        </div>
+        <div class="workspace-menu-wrap">
+          <button
+            type="button"
+            class="workspace-menu-button"
+            title="Workspace options"
+            aria-haspopup="menu"
+            // String literal, not bool — both Solid's attribute serialiser
+            // edge cases AND our CSS selector (`[aria-expanded="true"]`)
+            // need a stable string value to reliably style the open state.
+            aria-expanded={openMenuId() === ws.id ? "true" : "false"}
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpenMenuId(openMenuId() === ws.id ? null : ws.id);
+            }}
+          >
+            ⋯
+          </button>
+          <Show when={openMenuId() === ws.id}>
+            <div class="workspace-menu-popover" role="menu">
+              <div class="workspace-menu-label">Project</div>
+              <button
+                type="button"
+                class="workspace-menu-item"
+                classList={{ "workspace-menu-item--current": ws.project_id == null }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  props.onAssignProject(ws.id, null);
+                  setOpenMenuId(null);
+                }}
+              >
+                <span class="workspace-menu-swatch workspace-menu-swatch--none" />
+                <span class="workspace-menu-item-label">None</span>
+              </button>
+              <For each={props.projects}>
+                {(p) => (
+                  <button
+                    type="button"
+                    class="workspace-menu-item"
+                    classList={{
+                      "workspace-menu-item--current": ws.project_id === p.id,
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      props.onAssignProject(ws.id, p.id);
+                      setOpenMenuId(null);
+                    }}
+                  >
+                    <span
+                      class="workspace-menu-swatch"
+                      style={p.accent ? { "background-color": p.accent } : undefined}
+                    />
+                    <span class="workspace-menu-item-label">{p.name}</span>
+                  </button>
+                )}
+              </For>
+            </div>
+          </Show>
         </div>
         <button
           type="button"
