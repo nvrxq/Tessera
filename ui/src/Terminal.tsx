@@ -1,6 +1,10 @@
 import { createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import {
+  readText as clipReadText,
+  writeText as clipWriteText,
+} from "@tauri-apps/plugin-clipboard-manager";
 import { spawnAgent } from "./lib/workspaces";
 
 export interface TerminalProps {
@@ -65,6 +69,13 @@ export default function Terminal(props: TerminalProps) {
     if (sid === activeSessionId) return;
     activeSessionId = sid;
     pendingSnaps.length = 0;
+    // Selection is per-grid; the new session has its own dimensions and
+    // content, so any leftover highlight from the previous session would
+    // be visually nonsensical. Reset without repainting — the upcoming
+    // `full` snapshot from the new session will repaint shortly.
+    selStart = null;
+    selEnd = null;
+    selDragging = false;
   };
 
   // Local grid mirror — flat row-major Array(cols*rows). Updated on every
@@ -93,6 +104,123 @@ export default function Terminal(props: TerminalProps) {
   let baseline = 0;
   let lastKeydownAt = 0;
   const spawning = new Set<string>();
+
+  // ── Text selection on the canvas ──
+  // Canvas2D has no DOM text, so we maintain our own grid selection.
+  // selStart/selEnd are in grid coords (col, row). Pointer down → start
+  // a fresh selection; pointer move (while dragging) → extend end; pointer
+  // up with start==end clears (treat as a plain click).
+  type CellPos = { col: number; row: number };
+  let selStart: CellPos | null = null;
+  let selEnd: CellPos | null = null;
+  let selDragging = false;
+  // Rate-limit selection-driven repaints to one per frame.
+  let selRepaintQueued = false;
+
+  function selectionRange(): { a: CellPos; b: CellPos } | null {
+    if (!selStart || !selEnd) return null;
+    const aFirst =
+      selStart.row < selEnd.row ||
+      (selStart.row === selEnd.row && selStart.col <= selEnd.col);
+    return aFirst
+      ? { a: selStart, b: selEnd }
+      : { a: selEnd, b: selStart };
+  }
+
+  function selectionEmpty(r: { a: CellPos; b: CellPos } | null): boolean {
+    return !r || (r.a.col === r.b.col && r.a.row === r.b.row);
+  }
+
+  function selectionToText(): string {
+    const r = selectionRange();
+    if (!r || gridCols === 0) return "";
+    const { a, b } = r;
+    const lines: string[] = [];
+    for (let row = a.row; row <= b.row; row++) {
+      const startCol = row === a.row ? a.col : 0;
+      const endCol = row === b.row ? b.col : gridCols - 1;
+      let s = "";
+      for (let col = startCol; col <= endCol; col++) {
+        const cell = grid[row * gridCols + col];
+        s += cell ? cell.c : " ";
+      }
+      lines.push(s.replace(/\s+$/, ""));
+    }
+    return lines.join("\n");
+  }
+
+  /** Mouse coord → grid cell. Coordinates come in CSS pixels; cellW/cellH
+   *  are in canvas backing-store pixels (multiplied by dpr), so we divide
+   *  back out. Clamped to grid bounds. */
+  function cellAtClient(clientX: number, clientY: number): CellPos | null {
+    if (cellW === 0 || cellH === 0 || gridCols === 0 || gridRows === 0) {
+      return null;
+    }
+    const rect = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = cellW / dpr;
+    const cssH = cellH / dpr;
+    const col = Math.floor((clientX - rect.left) / cssW);
+    const row = Math.floor((clientY - rect.top) / cssH);
+    return {
+      col: Math.max(0, Math.min(gridCols - 1, col)),
+      row: Math.max(0, Math.min(gridRows - 1, row)),
+    };
+  }
+
+  /** Translucent blue overlay over the selected cells. Painted last so it
+   *  sits on top of glyphs and cursor; low alpha keeps text readable.
+   *  Clamps to current grid dims so a stale selection after a shrink
+   *  doesn't paint outside the canvas. */
+  function paintSelectionOverlay(ctx: CanvasRenderingContext2D) {
+    const r = selectionRange();
+    if (!r || gridCols === 0 || gridRows === 0) return;
+    ctx.fillStyle = "rgba(110, 160, 220, 0.32)";
+    const startRow = Math.max(0, Math.min(gridRows - 1, r.a.row));
+    const endRow = Math.max(0, Math.min(gridRows - 1, r.b.row));
+    if (endRow < startRow) return;
+    for (let row = startRow; row <= endRow; row++) {
+      let startCol = row === r.a.row ? r.a.col : 0;
+      let endCol = row === r.b.row ? r.b.col : gridCols - 1;
+      startCol = Math.max(0, Math.min(gridCols - 1, startCol));
+      endCol = Math.max(0, Math.min(gridCols - 1, endCol));
+      if (endCol < startCol) continue;
+      const x = startCol * cellW;
+      const y = row * cellH;
+      const w = (endCol - startCol + 1) * cellW;
+      ctx.fillRect(x, y, w, cellH);
+    }
+  }
+
+  /** Full repaint from the local grid mirror + cursor + selection. Used by
+   *  pointermove during a drag — cheap (≤ ~12000 cells at 60Hz). */
+  function repaintFromGrid() {
+    const ctx = ctx2dOf();
+    if (!ctx || gridCols === 0) return;
+    const px = fontPx * (window.devicePixelRatio || 1);
+    paintFull(px);
+    if (lastCursorVisible) {
+      paintCursor(ctx, lastCursorCol, lastCursorRow, lastCursorShape, px);
+    }
+    paintSelectionOverlay(ctx);
+  }
+
+  function scheduleSelectionRepaint() {
+    if (selRepaintQueued) return;
+    selRepaintQueued = true;
+    requestAnimationFrame(() => {
+      selRepaintQueued = false;
+      repaintFromGrid();
+    });
+  }
+
+  function clearSelection() {
+    if (!selStart && !selEnd) return;
+    selStart = null;
+    selEnd = null;
+    selDragging = false;
+    repaintFromGrid();
+  }
 
   /** Three-stage load state for the loading overlay:
    *  - "spawning":   waiting on `workspace_spawn_agent` to return a session id
@@ -357,6 +485,7 @@ export default function Terminal(props: TerminalProps) {
       }
       ctx.fillRect(x, y, w, h);
     }
+    paintSelectionOverlay(ctx);
   }
 
   function applySnapshot(snap: Snapshot) {
@@ -418,6 +547,13 @@ export default function Terminal(props: TerminalProps) {
     lastCursorRow = snap.cursor_row;
     lastCursorVisible = snap.cursor_visible;
     lastCursorShape = snap.cursor_shape;
+
+    // A delta path may have overpainted cells that the user has selected;
+    // re-stamp the translucent overlay on top so the highlight survives.
+    // (paintFull above already includes selection internally.)
+    if (!snap.full && (snap.positions?.length ?? 0) > 0) {
+      paintSelectionOverlay(ctx);
+    }
 
     // First snapshot for this workspace landed — fade out the loading
     // overlay. Subsequent snapshots are no-ops here.
@@ -562,6 +698,50 @@ export default function Terminal(props: TerminalProps) {
           void syncGrid();
           return;
         }
+        // Copy / paste. macOS: Cmd+C/V. Linux convention: Ctrl+Shift+C/V
+        // (bare Ctrl+C must still pass through as SIGINT to the agent).
+        const isCopyPasteMod =
+          ev.metaKey || (ev.ctrlKey && ev.shiftKey);
+        if (isCopyPasteMod) {
+          const k = ev.key.toLowerCase();
+          if (k === "c") {
+            const range = selectionRange();
+            if (range && !selectionEmpty(range)) {
+              const text = selectionToText();
+              if (text) {
+                ev.preventDefault();
+                void clipWriteText(text).catch((e) =>
+                  console.warn("clipboard write failed", e),
+                );
+                return;
+              }
+            }
+            // No selection — let the event fall through so Ctrl+C
+            // (no shift, no meta) can still reach encodeKey → PTY SIGINT.
+            // With meta or ctrl+shift held we already know it's not SIGINT
+            // intent; swallow it silently.
+            if (ev.metaKey || ev.shiftKey) return;
+          }
+          if (k === "v") {
+            ev.preventDefault();
+            void (async () => {
+              try {
+                const text = await clipReadText();
+                if (!text) return;
+                const enc = new TextEncoder().encode(text);
+                let bin = "";
+                for (const byte of enc) bin += String.fromCharCode(byte);
+                await invoke("pty_write", {
+                  sessionId: sid,
+                  dataB64: btoa(bin),
+                });
+              } catch (e) {
+                console.warn("paste failed", e);
+              }
+            })();
+            return;
+          }
+        }
       }
       const bytes = encodeKey(ev);
       if (bytes.length === 0) return;
@@ -634,9 +814,56 @@ export default function Terminal(props: TerminalProps) {
     }
   });
 
+  // ── Pointer-driven text selection ──
+  const onPointerDown = (ev: PointerEvent) => {
+    if (ev.button !== 0) return; // left button only
+    const cell = cellAtClient(ev.clientX, ev.clientY);
+    if (!cell) return;
+    selStart = cell;
+    selEnd = cell;
+    selDragging = true;
+    try {
+      canvas.setPointerCapture(ev.pointerId);
+    } catch {
+      /* setPointerCapture can throw if the pointer id is already lost; harmless */
+    }
+    ev.preventDefault();
+    scheduleSelectionRepaint();
+  };
+  const onPointerMove = (ev: PointerEvent) => {
+    if (!selDragging) return;
+    const cell = cellAtClient(ev.clientX, ev.clientY);
+    if (!cell) return;
+    if (selEnd && cell.col === selEnd.col && cell.row === selEnd.row) return;
+    selEnd = cell;
+    scheduleSelectionRepaint();
+  };
+  const onPointerUp = (ev: PointerEvent) => {
+    if (!selDragging) return;
+    selDragging = false;
+    try {
+      canvas.releasePointerCapture(ev.pointerId);
+    } catch {
+      /* same — releasePointerCapture can throw on unknown id */
+    }
+    const range = selectionRange();
+    if (selectionEmpty(range)) {
+      // Plain click without drag — clear the selection entirely.
+      selStart = null;
+      selEnd = null;
+      scheduleSelectionRepaint();
+    }
+  };
+
   return (
     <div class="overlay-anchor" ref={host} tabIndex={-1}>
-      <canvas ref={canvas} />
+      <canvas
+        ref={canvas}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+      />
       <div
         class="terminal-loading"
         classList={{ "terminal-loading--ready": phase() === "ready" }}

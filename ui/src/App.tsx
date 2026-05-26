@@ -1,4 +1,5 @@
 import { createResource, createSignal, onCleanup, onMount, Show, type Component } from "solid-js";
+import { message } from "@tauri-apps/plugin-dialog";
 import Sidebar from "./Sidebar";
 import NewWorkspaceForm from "./NewWorkspaceForm";
 import ProjectsSettings from "./ProjectsSettings";
@@ -210,7 +211,7 @@ const App: Component = () => {
       mutate((list) => list?.filter((w) => w.id !== id) ?? list);
       if (selectedId() === id) setSelectedId(null);
     } catch (e) {
-      alert(`Delete failed: ${String(e)}`);
+      void message(`Delete failed: ${String(e)}`, { kind: "error", title: "Tessera" });
       refetch();
     }
   };

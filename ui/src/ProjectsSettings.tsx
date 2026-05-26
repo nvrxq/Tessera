@@ -1,4 +1,5 @@
 import { createSignal, For, onCleanup, onMount, Show, type Component } from "solid-js";
+import { ask } from "@tauri-apps/plugin-dialog";
 import {
   PROJECT_SWATCHES,
   type Project,
@@ -111,14 +112,12 @@ const ProjectsSettings: Component<ProjectsSettingsProps> = (props) => {
                     class="projects-modal-delete"
                     title="Delete project"
                     aria-label={`Delete ${p.name}`}
-                    onClick={() => {
-                      if (
-                        confirm(
-                          `Delete project "${p.name}"? Workspaces assigned to it will become un-assigned (they're not deleted).`,
-                        )
-                      ) {
-                        void props.onDelete(p.id);
-                      }
+                    onClick={async () => {
+                      const ok = await ask(
+                        `Delete project "${p.name}"?\n\nWorkspaces assigned to it will become un-assigned (they're not deleted).`,
+                        { title: "Delete project", kind: "warning", okLabel: "Delete", cancelLabel: "Cancel" },
+                      );
+                      if (ok) void props.onDelete(p.id);
                     }}
                   >
                     ×

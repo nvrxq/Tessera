@@ -43,6 +43,8 @@ pub fn run() {
     let socket_path = data_dir.join("hooks.sock");
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .manage(supervisor.clone())
         .manage(workspace_service.clone())
         .manage(registry.clone())

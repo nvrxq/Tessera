@@ -1,5 +1,6 @@
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import type { Component } from "solid-js";
+import { ask } from "@tauri-apps/plugin-dialog";
 import {
   statusLabel,
   type AgentStatus,
@@ -234,6 +235,9 @@ const Sidebar: Component<SidebarProps> = (props) => {
             // edge cases AND our CSS selector (`[aria-expanded="true"]`)
             // need a stable string value to reliably style the open state.
             aria-expanded={openMenuId() === ws.id ? "true" : "false"}
+            draggable={false}
+            onMouseDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
               setOpenMenuId(openMenuId() === ws.id ? null : ws.id);
@@ -286,15 +290,16 @@ const Sidebar: Component<SidebarProps> = (props) => {
           type="button"
           class="workspace-delete"
           title="Delete workspace"
-          onClick={(e) => {
+          draggable={false}
+          onMouseDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={async (e) => {
             e.stopPropagation();
-            if (
-              confirm(
-                `Delete workspace "${ws.name}"? The DB row is removed; on-disk files are left alone.`,
-              )
-            ) {
-              props.onDelete(ws.id);
-            }
+            const ok = await ask(
+              `Delete workspace "${ws.name}"?\n\nThe DB row is removed; on-disk files are left alone.`,
+              { title: "Delete workspace", kind: "warning", okLabel: "Delete", cancelLabel: "Cancel" },
+            );
+            if (ok) props.onDelete(ws.id);
           }}
         >
           ×
