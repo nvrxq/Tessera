@@ -40,7 +40,67 @@ sudo apt-get install libwebkit2gtk-4.1-dev libssl-dev libgtk-3-dev \
                      libsoup-3.0-dev libjavascriptcoregtk-4.1-dev patchelf
 ```
 
-macOS has no extra system deps — Tauri uses the system WebKit.
+#### macOS
+
+Tauri uses the system WebKit — no Homebrew/MacPorts deps required. You need:
+
+- **macOS 11 Big Sur or newer**, on Apple Silicon (`aarch64`) or Intel (`x86_64`).
+  Cargo auto-detects your host triple, so `./scripts/build.sh` produces a native
+  binary for whichever Mac you build on.
+- **Xcode Command Line Tools** — gives you the `clang` linker and macOS SDK
+  headers that `rustc`/`cargo` need:
+  ```bash
+  xcode-select --install
+  ```
+  No full Xcode required.
+- **`rustup` + Bun + Claude Code** — same install commands as above.
+
+Build:
+
+```bash
+./scripts/build.sh
+./target/release/tessera
+```
+
+First release build takes ~3–5 min on Apple Silicon (cold cache) and produces a
+~11 MB binary at `target/release/tessera`. Subsequent incremental builds are a
+few seconds.
+
+If you'd rather develop with hot-reload UI, install the Tauri CLI once and use
+its dev mode:
+
+```bash
+cargo install tauri-cli@^2 --locked
+cargo tauri dev
+```
+
+##### Where Tessera stores data on macOS
+
+Everything is under `~/Library/Application Support/tessera`:
+
+| path                | purpose                                              |
+| ------------------- | ---------------------------------------------------- |
+| `state.db`          | SQLite — workspaces, projects, status                |
+| `hooks.sock`        | Unix-domain socket for Claude Code hook callbacks    |
+| `worktrees/`        | reserved for future Tessera-managed worktrees        |
+
+Reset state by deleting `state.db` (Tessera will recreate it on next launch).
+
+##### macOS troubleshooting
+
+- **"`tessera` can't be opened because Apple cannot check it for malicious
+  software"** — the binary you built locally isn't signed/notarized. Either
+  right-click → Open the first time, or strip the quarantine bit:
+  ```bash
+  xattr -d com.apple.quarantine target/release/tessera
+  ```
+- **`claude` not found when spawning an agent** — Tessera launches `claude`
+  from `PATH`. If you installed Claude Code via Homebrew Node, make sure your
+  shell's `PATH` (in `~/.zshrc`) is exported in GUI sessions too, or symlink
+  it into `/usr/local/bin`.
+- **Permission prompts on first PTY spawn** — macOS may ask for access to the
+  parent folder Tessera launches `claude` in (Documents/Desktop/etc.). Grant
+  once; it's remembered per-app.
 
 ## How it works
 
