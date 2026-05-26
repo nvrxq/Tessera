@@ -1,13 +1,20 @@
 mod commands;
+mod terminal;
 
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
 use tessera_core::AgentStatus;
 use tessera_hook::{HookEvent, HookKind, Listener};
-use tessera_overlay::{Handle as OverlayHandle, OverlayConfig};
 use tessera_pty::{PtyEvent, Supervisor};
 use tessera_workspace::WorkspaceService;
 use tracing_subscriber::EnvFilter;
+
+use crate::terminal::TerminalRegistry;
+
+/// Tracks last-known grid size per session so the PTY-pump thread can spawn
+/// a Term with the right dimensions on the first chunk. Updated by the
+/// frontend via `terminal_resize`.
+type GridSizes = Arc<Mutex<std::collections::HashMap<uuid::Uuid, (u16, u16)>>>;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -30,34 +37,147 @@ pub fn run() {
     let workspace_service: Arc<WorkspaceService> =
         Arc::new(WorkspaceService::new(db, supervisor.clone(), worktree_root));
 
-    let socket_path = data_dir.join("hooks.sock");
+    let registry: Arc<TerminalRegistry> = Arc::new(TerminalRegistry::new());
+    let grid_sizes: GridSizes = Arc::new(Mutex::new(std::collections::HashMap::new()));
 
-    let overlay: Arc<OverlayHandle> = Arc::new(tessera_overlay::spawn(OverlayConfig::default()));
+    let socket_path = data_dir.join("hooks.sock");
 
     tauri::Builder::default()
         .manage(supervisor.clone())
         .manage(workspace_service.clone())
-        .manage(overlay.clone())
+        .manage(registry.clone())
+        .manage(grid_sizes.clone())
         .setup(move |app| {
             let handle = app.handle().clone();
 
-            // PTY event pump — Data goes to the native overlay, Exit notifies JS.
+            // PTY → Term parser → frontend snapshot — two coordinated tasks.
+            //
+            // Pump task: drain PTY events as fast as they arrive, feeding
+            // bytes into the parser. Each Data chunk marks the session
+            // "dirty" but does NOT emit a snapshot — emitting on every byte
+            // burns CPU serialising a ~30 KB JSON payload per keystroke
+            // (1920 cells × 4 fields), which was responsible for the
+            // unusable input lag in the first cut.
+            //
+            // Render-tick task: wakes at 60 Hz, snapshots and emits only the
+            // sessions that became dirty since the last tick. This caps
+            // peak IPC at the display refresh rate, regardless of how fast
+            // claude floods the PTY (it can redraw the whole alt-screen 5×
+            // per frame; the user only ever sees one).
+            // 2 ms tick — empirically fastest configuration (Notify+gap was
+            // slower in practice because the post-emit sleep starved sustained
+            // claude streams). Idle cost: ~500 µs/sec of CPU.
+            //
+            // Per-byte latency budget on the backend side: ≤2 ms wait for
+            // the next tick + ~50 µs snapshot + ~100 µs JSON emit = ~2.2 ms.
+            // Frontend then has ~16 ms display-refresh floor.
+            let dirty: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<uuid::Uuid>>> =
+                std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
+            let pty_seen_at: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<uuid::Uuid, std::time::Instant>>> =
+                std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+            let bench_enabled = std::env::var("TESSERA_BENCH").is_ok();
             {
+                let reg = registry.clone();
+                let sizes = grid_sizes.clone();
+                let dirty = dirty.clone();
+                let seen = pty_seen_at.clone();
                 let handle = handle.clone();
-                let overlay_for_pump = overlay.clone();
                 let mut rx = supervisor.subscribe();
                 tauri::async_runtime::spawn(async move {
                     while let Ok(evt) = rx.recv().await {
                         match evt {
                             PtyEvent::Data { session_id, bytes } => {
-                                overlay_for_pump.feed_bytes(session_id, bytes);
+                                let (cols, rows) = sizes
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .get(&session_id)
+                                    .copied()
+                                    .unwrap_or((80, 24));
+                                let t_recv = std::time::Instant::now();
+                                if reg.feed(session_id, cols, rows, &bytes) {
+                                    // Capture the FIRST byte-arrival in a
+                                    // tick window; the emitter task reads
+                                    // it back to compute end-to-end latency.
+                                    seen.lock()
+                                        .unwrap()
+                                        .entry(session_id)
+                                        .or_insert(t_recv);
+                                    dirty.lock().unwrap_or_else(|e| e.into_inner()).insert(session_id);
+                                }
                             }
                             PtyEvent::Exit { session_id } => {
-                                overlay_for_pump.exit_session(session_id);
-                                let _ = handle.emit("pty_event", serde_json::json!({
-                                    "kind": "exit",
-                                    "session_id": session_id,
-                                }));
+                                reg.remove(session_id);
+                                sizes.lock().unwrap_or_else(|e| e.into_inner()).remove(&session_id);
+                                dirty.lock().unwrap_or_else(|e| e.into_inner()).remove(&session_id);
+                                seen.lock().unwrap_or_else(|e| e.into_inner()).remove(&session_id);
+                                let _ = handle.emit(
+                                    "pty_event",
+                                    serde_json::json!({
+                                        "kind": "exit",
+                                        "session_id": session_id,
+                                    }),
+                                );
+                            }
+                        }
+                    }
+                });
+            }
+            {
+                let handle = handle.clone();
+                let reg = registry.clone();
+                let dirty = dirty.clone();
+                let seen = pty_seen_at.clone();
+                tauri::async_runtime::spawn(async move {
+                    let mut tick = tokio::time::interval(
+                        std::time::Duration::from_millis(1),
+                    );
+                    tick.set_missed_tick_behavior(
+                        tokio::time::MissedTickBehavior::Delay,
+                    );
+                    loop {
+                        tick.tick().await;
+                        let to_snap: Vec<uuid::Uuid> = {
+                            let mut d = dirty.lock().unwrap_or_else(|e| e.into_inner());
+                            if d.is_empty() {
+                                continue;
+                            }
+                            let v: Vec<_> = d.iter().copied().collect();
+                            d.clear();
+                            v
+                        };
+                        for sid in to_snap {
+                            let t_pty = seen
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .remove(&sid);
+                            let t_snap_start = std::time::Instant::now();
+                            if let Some(snap) = reg.snapshot(sid) {
+                                let t_snap = t_snap_start.elapsed();
+                                let t_emit_start = std::time::Instant::now();
+                                let _ = handle.emit("term_snapshot", snap);
+                                let t_emit = t_emit_start.elapsed();
+                                if bench_enabled {
+                                    // Capture `total` BEFORE deriving
+                                    // wait, so the breakdown actually adds
+                                    // up: total = wait + snap + emit. The
+                                    // earlier version called `t_pty.elapsed()`
+                                    // twice at different points so the
+                                    // numbers drifted by ~µs and the row
+                                    // didn't reconcile.
+                                    let total_us = t_pty
+                                        .map(|t| t.elapsed().as_micros())
+                                        .unwrap_or(0);
+                                    let wait_us = total_us
+                                        .saturating_sub(t_snap.as_micros())
+                                        .saturating_sub(t_emit.as_micros());
+                                    eprintln!(
+                                        "[bench] wait={}µs  snap={}µs  emit={}µs  total={}µs",
+                                        wait_us,
+                                        t_snap.as_micros(),
+                                        t_emit.as_micros(),
+                                        total_us,
+                                    );
+                                }
                             }
                         }
                     }
@@ -90,10 +210,8 @@ pub fn run() {
             commands::workspace_list,
             commands::workspace_spawn_agent,
             commands::workspace_delete,
-            commands::overlay_set_bounds,
-            commands::overlay_set_visible,
-            commands::overlay_select_session,
-            commands::overlay_resize_grid,
+            commands::terminal_resize,
+            commands::list_directories,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -114,7 +232,6 @@ fn dispatch_hook(app: &AppHandle, svc: &Arc<WorkspaceService>, evt: HookEvent) {
         }),
     );
 
-    // PostToolUse + Bash + `git worktree add` -> remember the new worktree.
     if matches!(evt.kind, HookKind::PostToolUse) {
         let bash_command = evt
             .payload

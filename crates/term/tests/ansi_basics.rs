@@ -23,7 +23,11 @@ fn cursor_home_then_clear_screen_resets_grid() {
     // ESC[H = cursor home, ESC[2J = clear entire screen
     t.feed(b"\x1b[H\x1b[2J");
     let after = row_string(&t, &pal, 0);
-    assert_eq!(after.trim_end(), "", "row 0 should be blank after clear, got {after:?}");
+    assert_eq!(
+        after.trim_end(),
+        "",
+        "row 0 should be blank after clear, got {after:?}"
+    );
     let cur = t.cursor();
     assert_eq!((cur.col, cur.row), (0, 0));
 }

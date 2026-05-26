@@ -2,33 +2,61 @@ use bytemuck::{Pod, Zeroable};
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]
-pub struct Point { pub x: f32, pub y: f32 }
+pub struct Point {
+    pub x: f32,
+    pub y: f32,
+}
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]
-pub struct Rect { pub x: f32, pub y: f32, pub w: f32, pub h: f32 }
+pub struct Rect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]
-pub struct Color { pub r: u8, pub g: u8, pub b: u8, pub a: u8 }
+pub struct Color {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+    pub a: u8,
+}
 
 impl Color {
-    pub const fn rgb(r: u8, g: u8, b: u8) -> Self { Self { r, g, b, a: 255 } }
-    pub const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Self { Self { r, g, b, a } }
+    pub const fn rgb(r: u8, g: u8, b: u8) -> Self {
+        Self { r, g, b, a: 255 }
+    }
+    pub const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
+        Self { r, g, b, a }
+    }
 
     /// Convert an sRGB component to linear-light float in [0, 1].
     /// Used in the vertex shader path so the GPU can do correct blending.
     pub fn to_linear(self) -> [f32; 4] {
         fn comp(c: u8) -> f32 {
             let f = c as f32 / 255.0;
-            if f <= 0.04045 { f / 12.92 } else { ((f + 0.055) / 1.055).powf(2.4) }
+            if f <= 0.04045 {
+                f / 12.92
+            } else {
+                ((f + 0.055) / 1.055).powf(2.4)
+            }
         }
-        [comp(self.r), comp(self.g), comp(self.b), self.a as f32 / 255.0]
+        [
+            comp(self.r),
+            comp(self.g),
+            comp(self.b),
+            self.a as f32 / 255.0,
+        ]
     }
 }
 
 impl Rect {
-    pub const fn new(x: f32, y: f32, w: f32, h: f32) -> Self { Self { x, y, w, h } }
+    pub const fn new(x: f32, y: f32, w: f32, h: f32) -> Self {
+        Self { x, y, w, h }
+    }
     pub fn contains(self, p: Point) -> bool {
         p.x >= self.x && p.x < self.x + self.w && p.y >= self.y && p.y < self.y + self.h
     }

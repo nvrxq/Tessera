@@ -10,8 +10,8 @@ pub fn insert(conn: &Connection, ws: &Workspace) -> Result<()> {
     conn.execute(
         "INSERT INTO workspaces \
             (id, name, repo_path, worktree_path, branch, created_at, setup_status, \
-             detected_worktree, detected_branch, dangerous_skip_permissions) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+             detected_worktree, detected_branch, dangerous_skip_permissions, has_prior_session) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             ws.id.to_string(),
             ws.name,
@@ -25,6 +25,7 @@ pub fn insert(conn: &Connection, ws: &Workspace) -> Result<()> {
                 .map(|p| p.to_string_lossy().into_owned()),
             ws.detected_branch,
             ws.dangerous_skip_permissions as i64,
+            ws.has_prior_session as i64,
         ],
     )?;
     Ok(())
@@ -33,7 +34,7 @@ pub fn insert(conn: &Connection, ws: &Workspace) -> Result<()> {
 pub fn get(conn: &Connection, id: Uuid) -> Result<Option<Workspace>> {
     conn.query_row(
         "SELECT id, name, repo_path, worktree_path, branch, created_at, setup_status, \
-                detected_worktree, detected_branch, dangerous_skip_permissions \
+                detected_worktree, detected_branch, dangerous_skip_permissions, has_prior_session \
          FROM workspaces WHERE id = ?1",
         params![id.to_string()],
         row_to_workspace,
@@ -45,11 +46,20 @@ pub fn get(conn: &Connection, id: Uuid) -> Result<Option<Workspace>> {
 pub fn list(conn: &Connection) -> Result<Vec<Workspace>> {
     let mut stmt = conn.prepare(
         "SELECT id, name, repo_path, worktree_path, branch, created_at, setup_status, \
-                detected_worktree, detected_branch, dangerous_skip_permissions \
+                detected_worktree, detected_branch, dangerous_skip_permissions, has_prior_session \
          FROM workspaces ORDER BY created_at DESC",
     )?;
     let rows = stmt.query_map([], row_to_workspace)?;
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+pub fn mark_session_started(conn: &Connection, id: Uuid) -> Result<()> {
+    let n = conn.execute(
+        "UPDATE workspaces SET has_prior_session = 1 WHERE id = ?1",
+        params![id.to_string()],
+    )?;
+    anyhow::ensure!(n == 1, "workspace {id} not found");
+    Ok(())
 }
 
 pub fn update_setup_status(conn: &Connection, id: Uuid, status: &SetupStatus) -> Result<()> {
@@ -96,6 +106,7 @@ fn row_to_workspace(row: &rusqlite::Row<'_>) -> rusqlite::Result<Workspace> {
     let detected_wt: Option<String> = row.get(7)?;
     let detected_br: Option<String> = row.get(8)?;
     let dangerous: i64 = row.get(9)?;
+    let has_prior: i64 = row.get(10)?;
     Ok(Workspace {
         id: Uuid::parse_str(&id_s).map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
@@ -119,6 +130,7 @@ fn row_to_workspace(row: &rusqlite::Row<'_>) -> rusqlite::Result<Workspace> {
         detected_worktree: detected_wt.map(PathBuf::from),
         detected_branch: detected_br,
         dangerous_skip_permissions: dangerous != 0,
+        has_prior_session: has_prior != 0,
     })
 }
 
@@ -139,6 +151,7 @@ mod tests {
             detected_worktree: None,
             detected_branch: None,
             dangerous_skip_permissions: false,
+            has_prior_session: false,
         }
     }
 

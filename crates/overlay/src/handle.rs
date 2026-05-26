@@ -14,11 +14,22 @@ pub struct Handle {
 
 impl Handle {
     pub(crate) fn new(proxy: EventLoopProxy<OverlayMessage>, join: JoinHandle<()>) -> Self {
-        Self { proxy, join: Mutex::new(Some(join)) }
+        Self {
+            proxy,
+            join: Mutex::new(Some(join)),
+        }
     }
 
     pub fn set_bounds(&self, b: Bounds) {
         let _ = self.proxy.send_event(OverlayMessage::SetBounds(b));
+    }
+
+    pub fn set_scale_factor(&self, sf: f32) {
+        let _ = self.proxy.send_event(OverlayMessage::SetScaleFactor(sf));
+    }
+
+    pub fn set_font_size(&self, px: f32) {
+        let _ = self.proxy.send_event(OverlayMessage::SetFontSize(px));
     }
 
     pub fn set_visible(&self, v: bool) {
@@ -26,19 +37,27 @@ impl Handle {
     }
 
     pub fn feed_bytes(&self, session_id: uuid::Uuid, bytes: Vec<u8>) {
-        let _ = self.proxy.send_event(OverlayMessage::FeedBytes { session_id, bytes });
+        let _ = self
+            .proxy
+            .send_event(OverlayMessage::FeedBytes { session_id, bytes });
     }
 
     pub fn exit_session(&self, session_id: uuid::Uuid) {
-        let _ = self.proxy.send_event(OverlayMessage::ExitSession(session_id));
+        let _ = self
+            .proxy
+            .send_event(OverlayMessage::ExitSession(session_id));
     }
 
     pub fn select_session(&self, session_id: Option<uuid::Uuid>) {
-        let _ = self.proxy.send_event(OverlayMessage::SelectSession(session_id));
+        let _ = self
+            .proxy
+            .send_event(OverlayMessage::SelectSession(session_id));
     }
 
     pub fn resize_grid(&self, cols: u16, rows: u16) {
-        let _ = self.proxy.send_event(OverlayMessage::ResizeGrid { cols, rows });
+        let _ = self
+            .proxy
+            .send_event(OverlayMessage::ResizeGrid { cols, rows });
     }
 
     /// Send Shutdown and wait for the event loop to finish. Idempotent.

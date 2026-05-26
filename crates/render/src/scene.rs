@@ -31,15 +31,23 @@ pub struct Scene {
 }
 
 impl Scene {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
     pub fn clear(&mut self) {
         self.rects.clear();
         self.glyphs.clear();
         self.images.clear();
     }
-    pub fn push_rect(&mut self, e: RectEntry) { self.rects.push(e); }
-    pub fn push_glyph(&mut self, e: GlyphEntry) { self.glyphs.push(e); }
-    pub fn push_image(&mut self, e: ImageEntry) { self.images.push(e); }
+    pub fn push_rect(&mut self, e: RectEntry) {
+        self.rects.push(e);
+    }
+    pub fn push_glyph(&mut self, e: GlyphEntry) {
+        self.glyphs.push(e);
+    }
+    pub fn push_image(&mut self, e: ImageEntry) {
+        self.images.push(e);
+    }
 }
 
 #[cfg(test)]
@@ -47,7 +55,11 @@ mod tests {
     use super::*;
 
     fn sample_rect() -> RectEntry {
-        RectEntry { rect: Rect::new(0.0, 0.0, 10.0, 10.0), color: Color::rgb(255, 0, 0), corner_radius: 0.0 }
+        RectEntry {
+            rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+            color: Color::rgb(255, 0, 0),
+            corner_radius: 0.0,
+        }
     }
 
     #[test]

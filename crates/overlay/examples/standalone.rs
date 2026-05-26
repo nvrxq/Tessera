@@ -28,7 +28,8 @@ fn main() {
     //  - prompt with cursor block
     let payload: Vec<u8> = b"\x1b[31mHello\x1b[0m world from tessera-overlay\r\n\
         Plan 4 wiring smoke test\r\n\
-        Cursor \xe2\x86\x92 ".to_vec();
+        Cursor \xe2\x86\x92 "
+        .to_vec();
     handle.feed_bytes(session, payload);
 
     println!("overlay visible for 6 seconds — take a screenshot if you want one");

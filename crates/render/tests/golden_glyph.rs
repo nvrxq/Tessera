@@ -25,7 +25,11 @@ fn glyph_pipeline_draws_m_with_alpha() {
 
     let target = res.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("target"),
-        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -95,7 +99,11 @@ fn glyph_pipeline_draws_m_with_alpha() {
                 rows_per_image: None,
             },
         },
-        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
     );
     res.queue.submit(Some(enc.finish()));
 
@@ -103,7 +111,9 @@ fn glyph_pipeline_draws_m_with_alpha() {
     let (tx, rx) = std::sync::mpsc::channel();
     slice.map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
     // wgpu 29: PollType::wait_indefinitely() replaces Maintain::Wait
-    res.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    res.device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .unwrap();
     rx.recv().unwrap().unwrap();
     let data = slice.get_mapped_range();
 

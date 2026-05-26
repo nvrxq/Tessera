@@ -1,6 +1,6 @@
-import { createSignal } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 import type { Component } from "solid-js";
-import { createWorkspace, type WorkspaceDto } from "./lib/workspaces";
+import { createWorkspace, listDirectories, type WorkspaceDto } from "./lib/workspaces";
 
 export interface NewWorkspaceFormProps {
   onCreated: (ws: WorkspaceDto) => void;
@@ -13,6 +13,70 @@ const NewWorkspaceForm: Component<NewWorkspaceFormProps> = (props) => {
   const [dangerous, setDangerous] = createSignal(false);
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
+
+  // —— autocomplete state ——
+  const [suggestions, setSuggestions] = createSignal<string[]>([]);
+  const [showSuggest, setShowSuggest] = createSignal(false);
+  const [activeIdx, setActiveIdx] = createSignal(-1);
+  let debounceId: number | null = null;
+
+  const fetchSuggestions = (value: string) => {
+    if (debounceId != null) window.clearTimeout(debounceId);
+    debounceId = window.setTimeout(async () => {
+      const v = value.trim();
+      if (!v || (!v.startsWith("/") && !v.startsWith("~"))) {
+        setSuggestions([]);
+        return;
+      }
+      try {
+        const list = await listDirectories(v);
+        setSuggestions(list);
+        setActiveIdx(-1);
+      } catch {
+        setSuggestions([]);
+      }
+    }, 80);
+  };
+
+  const handleFolderInput = (e: InputEvent & { currentTarget: HTMLInputElement }) => {
+    const v = e.currentTarget.value;
+    setFolderPath(v);
+    setShowSuggest(true);
+    fetchSuggestions(v);
+  };
+
+  const pickSuggestion = (path: string) => {
+    setFolderPath(path);
+    setSuggestions([]);
+    setShowSuggest(false);
+    setActiveIdx(-1);
+  };
+
+  const handleFolderKey = (e: KeyboardEvent & { currentTarget: HTMLInputElement }) => {
+    const list = suggestions();
+    if (!showSuggest() || list.length === 0) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActiveIdx((i) => (i + 1) % list.length);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActiveIdx((i) => (i <= 0 ? list.length - 1 : i - 1));
+    } else if (e.key === "Tab") {
+      const idx = activeIdx() < 0 ? 0 : activeIdx();
+      if (list[idx]) {
+        e.preventDefault();
+        pickSuggestion(list[idx] + "/");
+        fetchSuggestions(list[idx] + "/");
+        setShowSuggest(true);
+      }
+    } else if (e.key === "Enter" && activeIdx() >= 0) {
+      e.preventDefault();
+      const idx = activeIdx();
+      if (list[idx]) pickSuggestion(list[idx]);
+    } else if (e.key === "Escape") {
+      setShowSuggest(false);
+    }
+  };
 
   const submit = async (e: Event) => {
     e.preventDefault();
@@ -31,6 +95,7 @@ const NewWorkspaceForm: Component<NewWorkspaceFormProps> = (props) => {
 
   return (
     <form class="new-workspace" onSubmit={submit}>
+      <h3>New workspace.</h3>
       <label>
         <span>Name *</span>
         <input
@@ -42,15 +107,46 @@ const NewWorkspaceForm: Component<NewWorkspaceFormProps> = (props) => {
           autofocus
         />
       </label>
-      <label>
+      <label class="folder-field">
         <span>Folder path *</span>
-        <input
-          type="text"
-          placeholder="/home/save/Work/Some/Repo"
-          value={folderPath()}
-          onInput={(e) => setFolderPath(e.currentTarget.value)}
-          required
-        />
+        <div class="folder-input-wrap">
+          <input
+            type="text"
+            placeholder="/home/save/Work or ~/Work"
+            value={folderPath()}
+            onInput={handleFolderInput}
+            onKeyDown={handleFolderKey}
+            onFocus={() => {
+              setShowSuggest(true);
+              if (folderPath().trim()) fetchSuggestions(folderPath());
+            }}
+            onBlur={() => {
+              // delay so a click on a suggestion can fire first
+              window.setTimeout(() => setShowSuggest(false), 120);
+            }}
+            autocomplete="off"
+            spellcheck={false}
+            required
+          />
+          <Show when={showSuggest() && suggestions().length > 0}>
+            <ul class="folder-suggest">
+              <For each={suggestions()}>
+                {(p, i) => (
+                  <li
+                    classList={{ active: i() === activeIdx() }}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      pickSuggestion(p);
+                    }}
+                    onMouseEnter={() => setActiveIdx(i())}
+                  >
+                    {p}
+                  </li>
+                )}
+              </For>
+            </ul>
+          </Show>
+        </div>
       </label>
       <label class="checkbox-row">
         <input

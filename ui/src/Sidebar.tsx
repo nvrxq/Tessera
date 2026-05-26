@@ -20,6 +20,25 @@ function statusLabelClass(s: AgentStatus | null): string {
   return `status-label status-label-${s}`;
 }
 
+const CLAUDE_PETALS = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330];
+
+const ClaudeMark: Component = () => (
+  <span class="claude-mark" aria-hidden="true" title="Claude Code">
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="none">
+      <g
+        transform="translate(12 12)"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+      >
+        <For each={CLAUDE_PETALS}>
+          {(deg) => <line y1="-9" y2="-4" transform={`rotate(${deg})`} />}
+        </For>
+      </g>
+    </svg>
+  </span>
+);
+
 function subline(ws: WorkspaceDto): string {
   if (ws.detected_worktree) {
     const branch = ws.detected_branch ? ` · ${ws.detected_branch}` : "";
@@ -50,6 +69,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
                 <span class={statusClass(ws.agent_status)} title={statusLabel(ws.agent_status)} />
                 <div class="workspace-meta">
                   <div class="workspace-name">
+                    <ClaudeMark />
                     <span class="workspace-name-text">{ws.name}</span>
                     <Show when={ws.dangerous_skip_permissions}>
                       <span class="dangerous-badge" title="--dangerously-skip-permissions">⚡</span>
@@ -80,6 +100,20 @@ const Sidebar: Component<SidebarProps> = (props) => {
           </For>
         </Show>
       </ul>
+      <button type="button" class="sidebar-newbutton" onClick={props.onNew} title="New workspace">
+        <span class="sidebar-newbutton-circle">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none">
+            <path
+              d="M5 12h14M13 6l6 6-6 6"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </span>
+        <span class="sidebar-newbutton-label">New workspace</span>
+      </button>
     </aside>
   );
 };

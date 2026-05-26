@@ -28,6 +28,7 @@ mod tests {
             detected_worktree: None,
             detected_branch: None,
             dangerous_skip_permissions: false,
+            has_prior_session: false,
         };
         let j = serde_json::to_string(&ws).unwrap();
         let back: Workspace = serde_json::from_str(&j).unwrap();

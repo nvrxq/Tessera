@@ -46,12 +46,33 @@ export function listWorkspaces(): Promise<WorkspaceDto[]> {
   return invoke<WorkspaceDto[]>("workspace_list");
 }
 
-export function spawnAgent(workspaceId: string): Promise<string> {
-  return invoke<string>("workspace_spawn_agent", { workspaceId });
+/** In-flight `workspace_spawn_agent` invocations, keyed by workspaceId.
+ *  Idempotent: a second call while the first is still resolving returns
+ *  the same promise. Lets the App-level pre-spawn (driven by clicking a
+ *  workspace) overlap safely with the Terminal-mount-driven spawn —
+ *  whichever caller arrives second just awaits the first one's result
+ *  instead of starting a duplicate claude process. */
+const inFlightSpawns = new Map<string, Promise<string>>();
+
+export function spawnAgent(
+  workspaceId: string,
+  cols: number,
+  rows: number,
+): Promise<string> {
+  const existing = inFlightSpawns.get(workspaceId);
+  if (existing) return existing;
+  const p = invoke<string>("workspace_spawn_agent", { workspaceId, cols, rows })
+    .finally(() => inFlightSpawns.delete(workspaceId));
+  inFlightSpawns.set(workspaceId, p);
+  return p;
 }
 
 export function deleteWorkspace(workspaceId: string, force: boolean): Promise<void> {
   return invoke<void>("workspace_delete", { workspaceId, force });
+}
+
+export function listDirectories(input: string): Promise<string[]> {
+  return invoke<string[]>("list_directories", { input });
 }
 
 export function onWorkspaceStatus(cb: (e: WorkspaceStatusEvent) => void): Promise<UnlistenFn> {

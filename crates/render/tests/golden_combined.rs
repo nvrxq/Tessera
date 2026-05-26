@@ -23,7 +23,11 @@ fn renderer_draws_combined_scene_in_one_submit() {
     let (w, h) = (512u32, 256u32);
     let target_tex = res.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("target"),
-        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,

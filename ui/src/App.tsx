@@ -7,13 +7,50 @@ import {
   listWorkspaces,
   onWorkspaceStatus,
   onWorkspaceWorktree,
+  spawnAgent,
   type WorkspaceDto,
 } from "./lib/workspaces";
+
+function useClock() {
+  const [time, setTime] = createSignal(new Date());
+  let id: number | null = null;
+  onMount(() => {
+    id = window.setInterval(() => setTime(new Date()), 30_000);
+  });
+  onCleanup(() => {
+    if (id != null) window.clearInterval(id);
+  });
+  return () => {
+    const d = time();
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    return `${hh}:${mm}`;
+  };
+}
+
+type Theme = "dark" | "light";
+function initialTheme(): Theme {
+  const stored = localStorage.getItem("tessera.theme");
+  if (stored === "light" || stored === "dark") return stored;
+  return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+}
+function applyTheme(t: Theme) {
+  document.documentElement.setAttribute("data-theme", t);
+  localStorage.setItem("tessera.theme", t);
+}
 
 const App: Component = () => {
   const [workspaces, { mutate, refetch }] = createResource<WorkspaceDto[]>(listWorkspaces);
   const [selectedId, setSelectedId] = createSignal<string | null>(null);
   const [showNew, setShowNew] = createSignal(false);
+  const clock = useClock();
+  const [theme, setTheme] = createSignal<Theme>(initialTheme());
+  applyTheme(theme());
+  const toggleTheme = () => {
+    const next: Theme = theme() === "dark" ? "light" : "dark";
+    setTheme(next);
+    applyTheme(next);
+  };
 
   let unlistenStatus: (() => void) | null = null;
   let unlistenWorktree: (() => void) | null = null;
@@ -48,6 +85,35 @@ const App: Component = () => {
 
   const onSelect = (id: string) => {
     setSelectedId(id);
+    // Pre-warm claude: kick off `workspace_spawn_agent` the moment the
+    // workspace is clicked, in parallel with `<Terminal>` mounting. This
+    // overlaps claude's ~200–500 ms cold start with the component setup
+    // and listener registration — by the time Terminal asks for a session,
+    // the spawn may already have resolved. `spawnAgent` is dedupe'd
+    // (lib/workspaces.ts), so Terminal's own spawn call will get the same
+    // session id rather than launching a second claude. We use a default
+    // 80×24 grid here; Terminal calls `terminal_resize` after measuring
+    // its container, which the backend handles instantly.
+    const ws = workspaces()?.find((w) => w.id === id);
+    if (ws && !ws.session_id) {
+      void spawnAgent(id, 80, 24)
+        .then((sid) => {
+          mutate(
+            (list) =>
+              list?.map((w) => (w.id === id ? { ...w, session_id: sid } : w)) ??
+              list,
+          );
+        })
+        .catch(() => {
+          /* Terminal will retry from its own createEffect */
+        });
+    }
+  };
+
+  const onTerminalSpawned = (workspaceId: string, sessionId: string) => {
+    mutate((list) =>
+      list?.map((w) => (w.id === workspaceId ? { ...w, session_id: sessionId } : w)) ?? list,
+    );
   };
 
   const onCreated = (ws: WorkspaceDto) => {
@@ -68,48 +134,76 @@ const App: Component = () => {
   };
 
   return (
-    <>
-      <header>
-        <h1>
-          <span class="t-accent">T</span>essera
-        </h1>
-      </header>
-      <div class="layout">
-        <Sidebar
-          workspaces={workspaces() ?? []}
-          selectedId={selectedId()}
-          onSelect={onSelect}
-          onDelete={onDelete}
-          onNew={() => setShowNew(true)}
-        />
-        <main class="main-pane">
-          <Show when={showNew()}>
-            <NewWorkspaceForm onCreated={onCreated} onCancel={() => setShowNew(false)} />
-          </Show>
-          <Show when={!showNew() && selected()} keyed>
-            {(ws) => (
+    <div class="frame">
+      <div class="card">
+        <header class="topbar">
+          <div class="brand">
+            <span class="brand-mark" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
+                <path
+                  d="M3 4l5-1 4 1 4-1 5 1v8l-5 5-4 1-4-1-5-5V4z"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </span>
+            <span class="brand-name">
+              <span class="brand-name-strong">Tessera.</span>{" "}
+              <span class="brand-name-tag">Agent orchestrator.</span>
+            </span>
+          </div>
+          <nav class="topnav">
+            <span class="topnav-item">Workspaces.</span>
+            <span class="topnav-item">Sessions.</span>
+            <span class="topnav-item">Hooks.</span>
+          </nav>
+          <div class="topmeta">
+            <span class="topmeta-clock">{clock()}</span>
+            <button
+              type="button"
+              class="topmeta-mode"
+              onClick={toggleTheme}
+              title={theme() === "dark" ? "Switch to light" : "Switch to dark"}
+              aria-label="Toggle theme"
+            >
+              {theme() === "dark" ? "☾" : "☀"}
+            </button>
+          </div>
+        </header>
+
+        <div class="layout">
+          <Sidebar
+            workspaces={workspaces() ?? []}
+            selectedId={selectedId()}
+            onSelect={onSelect}
+            onDelete={onDelete}
+            onNew={() => setShowNew(true)}
+          />
+          <main class="main-pane">
+            <Show when={showNew()}>
+              <NewWorkspaceForm onCreated={onCreated} onCancel={() => setShowNew(false)} />
+            </Show>
+            <Show when={!showNew() && selected()?.id}>
               <Terminal
-                workspaceId={ws.id}
-                sessionId={ws.session_id}
-                onSpawned={(sid) =>
-                  mutate((list) =>
-                    list?.map((w) => (w.id === ws.id ? { ...w, session_id: sid } : w)) ?? list,
-                  )
-                }
+                workspaceId={selected()!.id}
+                sessionId={selected()?.session_id ?? null}
+                onSpawned={(sid) => onTerminalSpawned(selected()!.id, sid)}
               />
-            )}
-          </Show>
-          <Show when={!showNew() && !selected()}>
-            <div class="empty-state">
-              <div class="empty-mosaic" aria-hidden="true">
-                <span /><span /><span /><span /><span /><span /><span /><span /><span />
-              </div>
-              <div>Select a workspace or create a new one.</div>
-            </div>
-          </Show>
-        </main>
+            </Show>
+            <Show when={!showNew() && !selected()}>
+              <section class="hero">
+                <div class="hero-mosaic" aria-hidden="true">
+                  <span /><span /><span /><span />
+                  <span /><span /><span /><span />
+                  <span /><span /><span /><span />
+                </div>
+              </section>
+            </Show>
+          </main>
+        </div>
       </div>
-    </>
+    </div>
   );
 };
 

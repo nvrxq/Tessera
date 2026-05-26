@@ -24,4 +24,7 @@ pub struct Workspace {
     pub detected_worktree: Option<PathBuf>,
     pub detected_branch: Option<String>,
     pub dangerous_skip_permissions: bool,
+    /// True once Claude has been launched in this workspace at least once.
+    /// On subsequent launches we pass `--continue` so the conversation resumes.
+    pub has_prior_session: bool,
 }

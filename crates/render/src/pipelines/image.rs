@@ -1,5 +1,5 @@
-use bytemuck::{Pod, Zeroable};
 use crate::scene::Scene;
+use bytemuck::{Pod, Zeroable};
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
@@ -34,7 +34,11 @@ pub struct ImagePipeline {
 }
 
 impl ImagePipeline {
-    pub fn new(device: &wgpu::Device, color_format: wgpu::TextureFormat, placeholder_size: u32) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        color_format: wgpu::TextureFormat,
+        placeholder_size: u32,
+    ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("image.wgsl"),
             source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/image.wgsl").into()),
@@ -203,12 +207,16 @@ impl ImagePipeline {
         scene: &Scene,
         screen: [f32; 2],
     ) -> u32 {
-        let instances: Vec<ImageInstance> = scene.images.iter().map(|e| ImageInstance {
-            pos: [e.rect.x, e.rect.y],
-            size: [e.rect.w, e.rect.h],
-            uv_min: e.uv_min,
-            uv_max: e.uv_max,
-        }).collect();
+        let instances: Vec<ImageInstance> = scene
+            .images
+            .iter()
+            .map(|e| ImageInstance {
+                pos: [e.rect.x, e.rect.y],
+                size: [e.rect.w, e.rect.h],
+                uv_min: e.uv_min,
+                uv_max: e.uv_max,
+            })
+            .collect();
 
         if instances.len() as u32 > self.instance_capacity {
             let new_cap = (instances.len() as u32).next_power_of_two();
@@ -225,7 +233,10 @@ impl ImagePipeline {
             queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instances));
         }
 
-        let u = Uniforms { screen_size: screen, _pad: [0.0; 2] };
+        let u = Uniforms {
+            screen_size: screen,
+            _pad: [0.0; 2],
+        };
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&u));
 
         instances.len() as u32

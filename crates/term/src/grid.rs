@@ -2,9 +2,9 @@
 //! visible cells of a `Term`. Not stored across `feed()` calls — re-borrow
 //! after each.
 
-use wezterm_term::Terminal;
 use crate::cell::GridCell;
 use crate::palette::ColorPalette;
+use wezterm_term::Terminal;
 
 pub struct Grid<'a> {
     term: &'a Terminal,
@@ -16,8 +16,12 @@ impl<'a> Grid<'a> {
         Self { term, palette }
     }
 
-    pub fn cols(&self) -> usize { self.term.screen().physical_cols }
-    pub fn rows(&self) -> usize { self.term.screen().physical_rows }
+    pub fn cols(&self) -> usize {
+        self.term.screen().physical_cols
+    }
+    pub fn rows(&self) -> usize {
+        self.term.screen().physical_rows
+    }
 
     /// Iterate visible rows top-to-bottom. Each item is a `Vec<GridCell>` of
     /// length `cols()`. Cells shorter than `cols()` are padded with default
@@ -38,24 +42,29 @@ impl<'a> Grid<'a> {
         let palette = self.palette;
         // lines_in_phys_range is unconditionally pub; visible_lines() is cfg(test).
         let start = screen.phys_row(0);
-        screen.lines_in_phys_range(start..start + rows).into_iter().map(move |line| {
-            let mut row: Vec<GridCell> = line
-                .visible_cells()
-                .map(|c| GridCell::from_wez(&c.as_cell(), palette))
-                .collect();
-            while row.len() < cols {
-                row.push(GridCell {
-                    ch: ' ',
-                    fg: palette.default_fg,
-                    bg: palette.default_bg,
-                    bold: false,
-                    italic: false,
-                    underline: false,
-                });
-            }
-            row.truncate(cols);
-            row
-        })
+        screen
+            .lines_in_phys_range(start..start + rows)
+            .into_iter()
+            .map(move |line| {
+                let mut row: Vec<GridCell> = line
+                    .visible_cells()
+                    .map(|c| GridCell::from_wez(&c.as_cell(), palette))
+                    .collect();
+                while row.len() < cols {
+                    row.push(GridCell {
+                        ch: ' ',
+                        fg: palette.default_fg,
+                        bg: palette.default_bg,
+                        bold: false,
+                        italic: false,
+                        underline: false,
+                        double_underline: false,
+                        strikethrough: false,
+                    });
+                }
+                row.truncate(cols);
+                row
+            })
     }
 
     /// Convenience: collect the full grid into `Vec<Vec<GridCell>>`. Allocates;

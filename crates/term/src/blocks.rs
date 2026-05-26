@@ -6,6 +6,23 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BlockId(pub String);
 
+/// A resolved command block: the shell told us about Start + (eventually)
+/// End, and we matched each to the cursor row at the transition. The
+/// overlay renderer reads `Term::blocks()` and draws a rounded-rect frame
+/// around the corresponding row range.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Block {
+    pub id: String,
+    /// Literal command line from the shell hook (best-effort).
+    pub command: String,
+    /// Inclusive — first viewport row covered. The hook fires after Enter,
+    /// so this is normally the row JUST BELOW the prompt+command line.
+    pub start_row: usize,
+    /// Inclusive — last viewport row. `None` while the command is in flight.
+    pub end_row: Option<usize>,
+    pub exit_code: Option<i32>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BlockEvent {
     Start {
@@ -105,10 +122,7 @@ impl BlockHandler {
 }
 
 impl wezterm_term::DeviceControlHandler for BlockHandler {
-    fn handle_device_control(
-        &mut self,
-        control: wezterm_escape_parser::DeviceControlMode,
-    ) {
+    fn handle_device_control(&mut self, control: wezterm_escape_parser::DeviceControlMode) {
         use wezterm_escape_parser::DeviceControlMode as M;
         match control {
             // Tessera DCS sequences arrive as ESC P + t <data> ST where
@@ -117,8 +131,7 @@ impl wezterm_term::DeviceControlHandler for BlockHandler {
             // byte=b't', then Data for each body byte, then Exit.
             M::Enter(ref e) => {
                 self.buf.clear();
-                self.in_tessera =
-                    e.intermediates == [b'+'] && e.byte == b't';
+                self.in_tessera = e.intermediates == [b'+'] && e.byte == b't';
             }
             M::Data(b) => {
                 if self.in_tessera {
@@ -153,9 +166,8 @@ mod tests {
     fn parse_start_payload() {
         let sink = BlockSink::new();
         let handler = BlockHandler::new(&sink);
-        let ok = handler.parse_payload(
-            r#"+tessera;v=1;{"event":"start","id":"abc","command":"ls -la"}"#,
-        );
+        let ok = handler
+            .parse_payload(r#"+tessera;v=1;{"event":"start","id":"abc","command":"ls -la"}"#);
         assert!(ok);
         let events = sink.drain();
         assert_eq!(events.len(), 1);
@@ -172,8 +184,7 @@ mod tests {
     fn parse_end_with_exit_code() {
         let sink = BlockSink::new();
         let handler = BlockHandler::new(&sink);
-        let ok = handler
-            .parse_payload(r#"+tessera;v=1;{"event":"end","id":"abc","exit_code":0}"#);
+        let ok = handler.parse_payload(r#"+tessera;v=1;{"event":"end","id":"abc","exit_code":0}"#);
         assert!(ok);
         let events = sink.drain();
         assert_eq!(events.len(), 1);

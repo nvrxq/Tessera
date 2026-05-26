@@ -1,5 +1,5 @@
-use bytemuck::{Pod, Zeroable};
 use crate::scene::Scene;
+use bytemuck::{Pod, Zeroable};
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
@@ -82,7 +82,11 @@ impl GlyphPipeline {
 
         let atlas_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("glyph atlas"),
-            size: wgpu::Extent3d { width: atlas_size, height: atlas_size, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: atlas_size,
+                height: atlas_size,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -161,7 +165,14 @@ impl GlyphPipeline {
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: color_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    // Premultiplied alpha — the fragment shader emits
+                    // `color.rgb * cov.rgb * alpha` and `cov.a * alpha`, so
+                    // the source contribution is already premultiplied. With
+                    // (One, OneMinusSrcAlpha) the destination is attenuated
+                    // by `1 - src.a` (per-pixel max coverage), which keeps
+                    // LCD subpixel detail in `src.rgb` while avoiding haloing
+                    // from divergent per-channel coverage on dst.
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -210,7 +221,11 @@ impl GlyphPipeline {
                 bytes_per_row: Some(self.atlas_size * 4),
                 rows_per_image: Some(self.atlas_size),
             },
-            wgpu::Extent3d { width: self.atlas_size, height: self.atlas_size, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: self.atlas_size,
+                height: self.atlas_size,
+                depth_or_array_layers: 1,
+            },
         );
     }
 
@@ -221,13 +236,17 @@ impl GlyphPipeline {
         scene: &Scene,
         screen: [f32; 2],
     ) -> u32 {
-        let instances: Vec<GlyphInstance> = scene.glyphs.iter().map(|g| GlyphInstance {
-            pos: [g.rect.x, g.rect.y],
-            size: [g.rect.w, g.rect.h],
-            color: g.color.to_linear(),
-            uv_min: g.uv_min,
-            uv_max: g.uv_max,
-        }).collect();
+        let instances: Vec<GlyphInstance> = scene
+            .glyphs
+            .iter()
+            .map(|g| GlyphInstance {
+                pos: [g.rect.x, g.rect.y],
+                size: [g.rect.w, g.rect.h],
+                color: g.color.to_linear(),
+                uv_min: g.uv_min,
+                uv_max: g.uv_max,
+            })
+            .collect();
 
         if instances.len() as u32 > self.instance_capacity {
             let new_cap = (instances.len() as u32).next_power_of_two();
@@ -244,7 +263,10 @@ impl GlyphPipeline {
             queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instances));
         }
 
-        let u = Uniforms { screen_size: screen, _pad: [0.0; 2] };
+        let u = Uniforms {
+            screen_size: screen,
+            _pad: [0.0; 2],
+        };
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&u));
 
         instances.len() as u32

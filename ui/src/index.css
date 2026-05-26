@@ -1,22 +1,28 @@
-:root {
-  /* —— colour tokens (see DESIGN.md) —— */
+:root,
+[data-theme="dark"] {
+  /* —— dark theme tokens (default) —— */
+  --bg-deep: #050506;
   --bg: #0F0F10;
-  --surface: #141415;
-  --surface-elevated: #1A1A1C;
-  --surface-hover: #1F1F22;
-  --surface-selected: #232328;
+  --surface: #121214;
+  --surface-elevated: #18181B;
+  --surface-hover: #1E1E22;
+  --surface-selected: #25252B;
 
   --border-subtle: #26262A;
-  --border-strong: #34343A;
+  --border-strong: #36363C;
 
-  --text-primary: #E8E8E6;
+  --text-primary: #ECECE8;
   --text-secondary: #B8B8B4;
   --text-muted: #8A8A86;
   --text-disabled: #5A5A57;
 
   --accent: #C8825B;
-  --accent-hover: #D89568;
+  --accent-hover: #DC9568;
   --accent-quiet: #6E4831;
+  --accent-soft: rgba(200, 130, 91, 0.18);
+
+  --leak-pink: #C58A88;
+  --leak-amber: #C8825B;
 
   --success: #7FBD7F;
   --working: #5B8DEF;
@@ -24,22 +30,67 @@
   --crashed: #D96666;
   --idle: #6B6B6B;
 
-  /* —— typography —— */
+  --card-shadow: 0 12px 24px rgba(0, 0, 0, 0.45);
+  --card-border: rgba(255, 255, 255, 0.04);
+  --card-inset: rgba(255, 255, 255, 0.04);
+  color-scheme: dark;
+}
+
+[data-theme="light"] {
+  /* —— light theme tokens (warm cream) —— */
+  --bg-deep: #ECE6D8;
+  --bg: #F7F2E7;
+  --surface: #FBF8F0;
+  --surface-elevated: #FFFFFF;
+  --surface-hover: #F2EDDF;
+  --surface-selected: #EAE2CE;
+
+  --border-subtle: #E0D8C4;
+  --border-strong: #C5BBA3;
+
+  --text-primary: #2A2622;
+  --text-secondary: #524C42;
+  --text-muted: #857E72;
+  --text-disabled: #B5AE9F;
+
+  --accent: #B36F49;
+  --accent-hover: #C57F58;
+  --accent-quiet: #8C5232;
+  --accent-soft: rgba(179, 111, 73, 0.14);
+
+  --leak-pink: #E8B8B0;
+  --leak-amber: #DDA572;
+
+  --success: #4F965F;
+  --working: #3F6CCC;
+  --needs-input: #B89017;
+  --crashed: #B84545;
+  --idle: #948D80;
+
+  --card-shadow: 0 8px 20px rgba(95, 65, 35, 0.15);
+  --card-border: rgba(0, 0, 0, 0.08);
+  --card-inset: rgba(255, 255, 255, 0.6);
+  color-scheme: light;
+}
+
+:root {
+  /* —— typography (theme-independent) —— */
   --font-ui: "Geist", system-ui, -apple-system, sans-serif;
   --font-mono: "Geist Mono", ui-monospace, "JetBrains Mono", Menlo, monospace;
+  --font-display: "Space Mono", "Geist Mono", ui-monospace, monospace;
+  --font-serif: "Instrument Serif", "Iowan Old Style", Georgia, serif;
 
   /* —— motion —— */
-  --ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
   --t-micro: 120ms;
   --t-short: 180ms;
   --t-medium: 280ms;
+  --t-long: 480ms;
 
   font-family: var(--font-ui);
   font-feature-settings: "ss01", "cv11";
-  color-scheme: dark;
-  background: var(--bg);
   color: var(--text-primary);
   font-size: 13px;
   line-height: 18px;
@@ -48,66 +99,214 @@
 * {
   box-sizing: border-box;
 }
+
 body {
   margin: 0;
   height: 100vh;
   overflow: hidden;
-}
-#root {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
+  background: var(--bg-deep);
+  position: relative;
+  isolation: isolate;
 }
 
-/* —— header —— */
-header {
-  height: 36px;
+/* —— gradient backdrop (the warm light leaks behind the card) —— */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: var(--bg-deep);
+  overflow: hidden;
+}
+[data-theme="dark"] .backdrop {
+  background: radial-gradient(ellipse at 50% 50%, #0E0E10 0%, #050506 70%);
+}
+[data-theme="light"] .backdrop {
+  background: radial-gradient(ellipse at 50% 50%, #F3EBD8 0%, #E2D6BB 80%);
+}
+.backdrop-leak {
+  position: absolute;
+  top: -10%;
+  bottom: -10%;
+  width: 38%;
+  opacity: 0.45;
+}
+.backdrop-leak-left {
+  left: -18%;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    var(--leak-pink) 30%,
+    var(--leak-amber) 60%,
+    transparent 100%
+  );
+  transform: skewX(-3deg);
+}
+.backdrop-leak-right {
+  right: -18%;
+  background: linear-gradient(
+    0deg,
+    transparent 0%,
+    var(--leak-pink) 30%,
+    var(--leak-amber) 60%,
+    transparent 100%
+  );
+  transform: skewX(3deg);
+}
+[data-theme="light"] .backdrop-leak {
+  opacity: 0.55;
+}
+
+/* —— frame wraps the whole app in a generous padded backdrop —— */
+.frame {
+  position: relative;
+  height: 100vh;
+  padding: 18px;
+  display: flex;
+}
+
+/* —— the rounded card holds the entire app surface —— */
+.card {
+  flex: 1;
+  min-height: 0;
+  background: var(--bg);
+  border: 1px solid var(--card-border);
+  border-radius: 18px;
+  box-shadow: var(--card-shadow), inset 0 1px 0 var(--card-inset);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+[data-theme="dark"] .card {
+  background: #101012;
+}
+[data-theme="light"] .card {
+  background: #F7F2E7;
+}
+
+/* —— topbar (header on top of the card) —— */
+.topbar {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  height: 52px;
+  padding: 0 22px;
+  border-bottom: 1px solid var(--border-subtle);
+  position: relative;
+  z-index: 1;
+}
+.brand {
   display: flex;
   align-items: center;
-  padding: 0 16px;
-  background: var(--surface-elevated);
-  border-bottom: 1px solid var(--border-subtle);
-}
-header h1 {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 500;
-  letter-spacing: 0.01em;
+  gap: 12px;
   color: var(--text-primary);
 }
-header h1 .t-accent {
-  color: var(--accent);
-  display: inline-block;
-  transition: transform var(--t-medium) var(--ease-spring);
+.brand-mark {
+  display: inline-flex;
+  color: var(--text-primary);
+  transition: transform var(--t-medium) var(--ease-spring), color var(--t-medium);
 }
-header h1:hover .t-accent {
-  transform: translateY(-1px) rotate(-3deg);
+.brand:hover .brand-mark {
+  transform: rotate(-6deg) scale(1.06);
+  color: var(--accent);
+}
+.brand-name {
+  font-size: 13px;
+  letter-spacing: 0.01em;
+}
+.brand-name-strong {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.brand-name-tag {
+  color: var(--text-muted);
+}
+
+.topnav {
+  display: flex;
+  gap: 28px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+.topnav-item {
+  letter-spacing: 0.01em;
+  cursor: default;
+  transition: color var(--t-micro);
+}
+.topnav-item:hover {
+  color: var(--text-primary);
+}
+
+.topmeta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.topmeta-clock {
+  letter-spacing: 0.04em;
+}
+.topmeta-mode {
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: 50%;
+  font-size: 13px;
+  font-family: var(--font-ui);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    border-color var(--t-short),
+    color var(--t-short),
+    transform var(--t-short) var(--ease-spring),
+    background var(--t-short);
+}
+.topmeta-mode:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+  transform: rotate(20deg);
 }
 
 /* —— layout —— */
 .layout {
   flex: 1;
   display: grid;
-  grid-template-columns: 240px 1fr;
+  grid-template-columns: 260px 1fr;
   min-height: 0;
+  position: relative;
+  z-index: 1;
 }
 
 /* —— sidebar —— */
 .sidebar {
-  background: var(--surface-elevated);
   border-right: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
   min-height: 0;
+  padding-top: 8px;
+  position: relative;
 }
 .sidebar-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 12px 6px;
+  padding: 8px 22px 6px;
+  font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 500;
-  letter-spacing: 0.10em;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--text-muted);
 }
@@ -118,15 +317,17 @@ header h1:hover .t-accent {
   overflow-y: auto;
 }
 .workspace-empty {
-  padding: 16px 12px;
+  padding: 16px 22px;
   color: var(--text-muted);
   font-size: 12px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
 }
 .workspace-item {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  padding: 10px 12px;
+  gap: 12px;
+  padding: 12px 22px;
   cursor: pointer;
   border-left: 2px solid transparent;
   position: relative;
@@ -150,41 +351,62 @@ header h1:hover .t-accent {
   bottom: 0;
   width: 2px;
   background: var(--accent);
-  box-shadow: 0 0 8px rgba(200, 130, 91, 0.5);
+  box-shadow: 0 0 10px rgba(200, 130, 91, 0.6);
   animation: accent-glow var(--t-medium) var(--ease-out) both;
 }
 .workspace-meta {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
   min-width: 0;
   flex: 1;
 }
 .workspace-name {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   color: var(--text-primary);
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
   overflow: hidden;
+  letter-spacing: -0.005em;
+  line-height: 1.25;
 }
 .workspace-name-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  word-break: break-word;
   min-width: 0;
+  flex: 1;
+}
+.dangerous-badge {
+  flex-shrink: 0;
+  margin-top: 2px;
 }
 .dangerous-badge {
   color: var(--needs-input);
   font-size: 11px;
   line-height: 1;
-  filter: drop-shadow(0 0 4px rgba(230, 200, 76, 0.4));
+  filter: drop-shadow(0 0 4px rgba(230, 200, 76, 0.5));
+}
+.claude-mark {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent);
+  margin-top: 2px;
+  opacity: 0.95;
+}
+.workspace-item.selected .claude-mark {
+  color: var(--accent-hover);
+  opacity: 1;
 }
 .workspace-substack {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
   min-width: 0;
 }
 .workspace-branch {
@@ -194,6 +416,7 @@ header h1:hover .t-accent {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  letter-spacing: 0.02em;
 }
 .workspace-delete {
   background: transparent;
@@ -221,25 +444,113 @@ header h1:hover .t-accent {
   background: var(--surface-hover);
 }
 
-/* —— status text labels (inline next to the dot) —— */
+/* status text labels */
 .status-label {
   font-size: 11px;
   font-weight: 500;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
   font-family: var(--font-mono);
   transition: color var(--t-medium) var(--ease-out);
 }
 .status-label-none { color: var(--text-disabled); }
 .status-label-idle { color: var(--idle); }
-.status-label-working {
-  color: var(--working);
-}
+.status-label-working { color: var(--working); }
 .status-label-needs_input {
   color: var(--needs-input);
-  animation: label-attention 2.2s ease-in-out infinite;
 }
 .status-label-done { color: var(--success); }
 .status-label-crashed { color: var(--crashed); }
+
+/* status dots */
+.status-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  margin-top: 7px;
+  border-radius: 50%;
+  background: var(--idle);
+  box-shadow: 0 0 0 1px var(--surface-elevated) inset;
+  transition: background var(--t-medium) var(--ease-out), box-shadow var(--t-medium) var(--ease-out);
+}
+.status-none { background: var(--idle); opacity: 0.5; }
+.status-idle { background: var(--idle); }
+.status-working {
+  background: var(--working);
+  box-shadow: 0 0 10px rgba(91, 141, 239, 0.65);
+  animation: dot-breathe 1.6s ease-in-out infinite;
+}
+.status-needs_input {
+  background: var(--needs-input);
+  box-shadow: 0 0 10px rgba(230, 200, 76, 0.65);
+  animation: dot-attention 2.2s ease-in-out infinite;
+}
+.status-done {
+  background: var(--success);
+  box-shadow: 0 0 8px rgba(127, 189, 127, 0.35);
+}
+.status-crashed {
+  background: var(--crashed);
+  box-shadow: 0 0 8px rgba(217, 102, 102, 0.4);
+}
+
+/* —— sidebar "new" circular button (editorial, like the reference) —— */
+.sidebar-head button {
+  display: none; /* hidden; we use the bottom circular button instead */
+}
+.sidebar-newbutton {
+  margin: 12px 22px 22px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  align-self: flex-start;
+}
+.sidebar-newbutton-circle {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-primary);
+  background: transparent;
+  transition:
+    border-color var(--t-short) var(--ease-out),
+    background var(--t-short) var(--ease-out),
+    color var(--t-short),
+    transform var(--t-short) var(--ease-spring);
+}
+.sidebar-newbutton-circle svg {
+  transition: transform var(--t-short) var(--ease-spring);
+}
+.sidebar-newbutton:hover .sidebar-newbutton-circle {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  transform: scale(1.04);
+}
+.sidebar-newbutton:hover .sidebar-newbutton-circle svg {
+  transform: translateX(2px);
+}
+.sidebar-newbutton-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  font-weight: 500;
+  transition: color var(--t-short);
+}
+.sidebar-newbutton:hover .sidebar-newbutton-label {
+  color: var(--text-primary);
+}
 
 /* —— main pane —— */
 .main-pane {
@@ -247,10 +558,10 @@ header h1:hover .t-accent {
   flex-direction: column;
   min-height: 0;
   min-width: 0;
-  background: var(--surface);
+  position: relative;
 }
 
-/* —— overlay anchor (native wgpu overlay covers this region) —— */
+/* —— terminal canvas host —— */
 .overlay-anchor {
   flex: 1;
   min-height: 0;
@@ -258,102 +569,191 @@ header h1:hover .t-accent {
   background: var(--bg);
   outline: none;
   position: relative;
+  overflow: hidden;
 }
-.overlay-anchor::before {
-  content: "(native overlay)";
-  position: absolute;
-  inset: 12px;
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  opacity: 0.18;
-  pointer-events: none;
+.overlay-anchor canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* Crisp 1:1 device-pixel mapping — Canvas2D backing-store size is set
+   * imperatively in code; this is just the CSS size. */
+  image-rendering: pixelated;
 }
 
-/* —— empty state with mosaic motif —— */
-.empty-state {
-  flex: 1;
+/* —— loading overlay shown while claude is cold-starting ——
+ * Editorial-minimal: brand mark, three staggered terracotta dots in a
+ * left-to-right wave, and a small uppercase caption. Fades out 320ms
+ * after the first `term_snapshot` lands. */
+.terminal-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 320ms var(--ease-out, ease-out);
+}
+.terminal-loading--ready {
+  opacity: 0;
+}
+
+.terminal-loading-stack {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 20px;
-  color: var(--text-muted);
-  font-size: 13px;
-  animation: pane-fade-in var(--t-medium) var(--ease-out) both;
+  gap: 22px;
+  animation: terminal-loading-enter 480ms var(--ease-out, ease-out) both;
 }
-.empty-mosaic {
-  width: 96px;
-  height: 96px;
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  grid-template-rows: repeat(3, 1fr);
-  gap: 4px;
-  opacity: 0.85;
+
+.terminal-loading-brand {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 400;
+  color: var(--text-secondary);
+  letter-spacing: 0.08em;
+  /* Subtle "type-in" — letter-spacing eases from wide to design value
+   * over the same window the stack fades up, giving the brand a hint of
+   * mechanical-typewriter settle without going gimmicky. */
+  animation: brand-settle 520ms var(--ease-out, ease-out) both;
 }
-.empty-mosaic span {
-  border-radius: 3px;
+
+.terminal-loading-dots {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.terminal-loading-dots span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
   background: var(--accent);
-  animation: tile-enter 700ms var(--ease-spring) both;
+  opacity: 0.3;
+  animation: loading-dot-wave 1.4s ease-in-out infinite;
+}
+/* Staggered phase so the row reads as a left→right pulse, not a flat
+ * three-some pulsing in unison. 180 ms between dots × 3 = 540 ms wave,
+ * folded back into the 1.4 s loop with ~860 ms of rest before it repeats. */
+.terminal-loading-dots span:nth-child(1) { animation-delay: 0ms; }
+.terminal-loading-dots span:nth-child(2) { animation-delay: 180ms; }
+.terminal-loading-dots span:nth-child(3) { animation-delay: 360ms; }
+
+.terminal-loading-caption {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 500;
+  color: var(--text-muted);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  /* Slight up-fade from below — matches the dot wave's rhythm without
+   * competing. Also re-runs whenever the text content changes
+   * (spawning → connecting), since CSS animations restart on
+   * Solid's surgical DOM replace. */
+  animation: caption-fade-in 360ms var(--ease-out, ease-out) both;
+}
+
+@keyframes terminal-loading-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes brand-settle {
+  from { letter-spacing: 0.24em; opacity: 0; }
+  to   { letter-spacing: 0.08em; opacity: 1; }
+}
+@keyframes caption-fade-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes loading-dot-wave {
+  0%   { opacity: 0.3; transform: scale(0.85) translateY(0); }
+  20%  { opacity: 1.0; transform: scale(1.05) translateY(-2px); }
+  40%  { opacity: 0.5; transform: scale(0.95) translateY(0); }
+  100% { opacity: 0.3; transform: scale(0.85) translateY(0); }
+}
+
+/* —— editorial hero (empty state) —— */
+.hero {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: pane-fade-in var(--t-long) var(--ease-out) both;
+  position: relative;
+}
+.hero-mosaic {
+  width: 260px;
+  height: 200px;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  gap: 8px;
+  filter: drop-shadow(0 8px 32px rgba(200, 130, 91, 0.25));
+}
+.hero-mosaic span {
+  border-radius: 4px;
+  background: linear-gradient(135deg, var(--accent), #B16E48);
+  animation: tile-enter 900ms var(--ease-spring) both;
   transform-origin: center;
 }
-.empty-mosaic span:nth-child(1) { opacity: 0.10; animation-delay: 0ms;   --rot: -2deg; }
-.empty-mosaic span:nth-child(2) { opacity: 0.18; animation-delay: 60ms;  --rot: 1deg; }
-.empty-mosaic span:nth-child(3) { opacity: 0.08; animation-delay: 120ms; --rot: -1deg; }
-.empty-mosaic span:nth-child(4) { opacity: 0.22; animation-delay: 80ms;  --rot: 2deg; }
-.empty-mosaic span:nth-child(5) { opacity: 0.32; animation-delay: 140ms; --rot: -3deg; }
-.empty-mosaic span:nth-child(6) { opacity: 0.14; animation-delay: 200ms; --rot: 1deg; }
-.empty-mosaic span:nth-child(7) { opacity: 0.06; animation-delay: 160ms; --rot: -1deg; }
-.empty-mosaic span:nth-child(8) { opacity: 0.18; animation-delay: 220ms; --rot: 2deg; }
-.empty-mosaic span:nth-child(9) { opacity: 0.12; animation-delay: 280ms; --rot: -2deg; }
+.hero-mosaic span:nth-child(1)  { opacity: 0.18; animation-delay: 0ms;   --rot: -2deg; }
+.hero-mosaic span:nth-child(2)  { opacity: 0.32; animation-delay: 50ms;  --rot: 1deg; }
+.hero-mosaic span:nth-child(3)  { opacity: 0.55; animation-delay: 110ms; --rot: -1deg; }
+.hero-mosaic span:nth-child(4)  { opacity: 0.20; animation-delay: 170ms; --rot: 2deg; }
+.hero-mosaic span:nth-child(5)  { opacity: 0.42; animation-delay: 80ms;  --rot: 1deg; }
+.hero-mosaic span:nth-child(6)  { opacity: 0.85; animation-delay: 140ms; --rot: -3deg; }
+.hero-mosaic span:nth-child(7)  { opacity: 0.60; animation-delay: 200ms; --rot: 2deg; }
+.hero-mosaic span:nth-child(8)  { opacity: 0.28; animation-delay: 260ms; --rot: -1deg; }
+.hero-mosaic span:nth-child(9)  { opacity: 0.22; animation-delay: 170ms; --rot: -1deg; }
+.hero-mosaic span:nth-child(10) { opacity: 0.48; animation-delay: 230ms; --rot: 2deg; }
+.hero-mosaic span:nth-child(11) { opacity: 0.36; animation-delay: 290ms; --rot: -2deg; }
+.hero-mosaic span:nth-child(12) { opacity: 0.16; animation-delay: 350ms; --rot: 1deg; }
 @keyframes tile-enter {
-  0% {
-    opacity: 0;
-    transform: scale(0.4) rotate(var(--rot));
-  }
-  100% {
-    opacity: var(--final-opacity, 0.20);
-    transform: scale(1) rotate(var(--rot));
-  }
+  0%   { opacity: 0; transform: scale(0.4) rotate(var(--rot)); }
+  100% { opacity: var(--final-opacity, 0.20); transform: scale(1) rotate(var(--rot)); }
 }
 
 /* —— new workspace form —— */
 .new-workspace {
-  padding: 24px;
+  padding: 56px 64px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  max-width: 520px;
+  gap: 18px;
+  max-width: 600px;
   animation: pane-fade-in var(--t-medium) var(--ease-out) both;
+}
+.new-workspace h3 {
+  font-family: var(--font-display);
+  font-size: 36px;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  margin: 0 0 12px;
+  color: var(--text-primary);
 }
 .new-workspace label {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 .new-workspace label > span {
+  font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 500;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--text-muted);
-}
-.new-workspace label > span em {
-  font-style: normal;
-  text-transform: none;
-  letter-spacing: 0;
-  color: var(--text-disabled);
-  font-weight: 400;
 }
 .new-workspace input[type="text"],
 .new-workspace textarea {
   background: var(--surface-elevated);
   border: 1px solid var(--border-subtle);
   color: var(--text-primary);
-  padding: 8px 10px;
+  padding: 10px 12px;
   font-family: var(--font-mono);
   font-size: 13px;
-  border-radius: 4px;
+  border-radius: 6px;
   outline: none;
   transition:
     border-color var(--t-short) var(--ease-out),
@@ -364,19 +764,54 @@ header h1:hover .t-accent {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(200, 130, 91, 0.15);
 }
-.new-workspace textarea {
-  resize: vertical;
-  min-height: 96px;
+
+/* —— folder autocomplete —— */
+.folder-input-wrap {
+  position: relative;
+}
+.folder-suggest {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 4px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  max-height: 260px;
+  overflow-y: auto;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+  animation: pane-fade-in 140ms var(--ease-out) both;
+}
+.folder-suggest li {
+  padding: 7px 10px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background var(--t-micro) var(--ease-out), color var(--t-micro);
+}
+.folder-suggest li.active,
+.folder-suggest li:hover {
+  background: var(--accent-soft);
+  color: var(--text-primary);
 }
 
 .checkbox-row {
   flex-direction: row !important;
-  gap: 10px !important;
+  gap: 12px !important;
   align-items: flex-start;
-  padding: 10px 12px;
+  padding: 12px 14px;
   background: var(--surface-elevated);
   border: 1px solid var(--border-subtle);
-  border-radius: 6px;
+  border-radius: 8px;
   cursor: pointer;
   transition: border-color var(--t-short) var(--ease-out);
 }
@@ -385,10 +820,10 @@ header h1:hover .t-accent {
 }
 .checkbox-row input[type="checkbox"] {
   appearance: none;
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   border: 1.5px solid var(--border-strong);
-  border-radius: 4px;
+  border-radius: 5px;
   background: var(--surface);
   cursor: pointer;
   position: relative;
@@ -404,10 +839,10 @@ header h1:hover .t-accent {
 .checkbox-row input[type="checkbox"]:checked::after {
   content: "";
   position: absolute;
-  left: 4.5px;
+  left: 5px;
   top: 1px;
   width: 4px;
-  height: 8px;
+  height: 9px;
   border: solid var(--bg);
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);
@@ -416,11 +851,11 @@ header h1:hover .t-accent {
 .checkbox-meta {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
   min-width: 0;
 }
 .checkbox-title {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
   color: var(--text-primary);
   letter-spacing: normal !important;
@@ -430,12 +865,12 @@ header h1:hover .t-accent {
   font-family: var(--font-mono);
   font-size: 11px;
   background: var(--surface);
-  padding: 1px 4px;
+  padding: 2px 6px;
   border-radius: 3px;
   color: var(--needs-input);
 }
 .checkbox-hint {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-muted);
   letter-spacing: normal !important;
   text-transform: none !important;
@@ -444,9 +879,9 @@ header h1:hover .t-accent {
 
 .form-actions {
   display: flex;
-  gap: 8px;
+  gap: 10px;
   justify-content: flex-end;
-  margin-top: 4px;
+  margin-top: 8px;
 }
 .form-error {
   color: var(--crashed);
@@ -462,12 +897,14 @@ button {
   background: var(--surface-elevated);
   color: var(--text-primary);
   border: 1px solid var(--border-subtle);
-  padding: 6px 12px;
+  padding: 7px 16px;
   cursor: pointer;
-  font-family: var(--font-ui);
-  font-size: 13px;
+  font-family: var(--font-mono);
+  font-size: 11px;
   font-weight: 500;
-  border-radius: 6px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  border-radius: 999px;
   transition:
     background var(--t-micro) var(--ease-out),
     border-color var(--t-micro) var(--ease-out),
@@ -493,56 +930,10 @@ button[type="submit"] {
 button[type="submit"]:hover:not(:disabled) {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
-  box-shadow: 0 0 16px rgba(200, 130, 91, 0.25);
-}
-.sidebar-head button {
-  padding: 2px 8px;
-  font-size: 14px;
-  line-height: 1;
-  background: transparent;
-  border: 1px solid transparent;
-  color: var(--text-muted);
-}
-.sidebar-head button:hover:not(:disabled) {
-  background: var(--surface-hover);
-  border-color: var(--border-subtle);
-  color: var(--text-primary);
-  transform: rotate(90deg);
+  box-shadow: 0 0 24px rgba(200, 130, 91, 0.3);
 }
 
-/* —— status dots —— */
-.status-dot {
-  flex-shrink: 0;
-  width: 8px;
-  height: 8px;
-  margin-top: 5px;
-  border-radius: 50%;
-  background: var(--idle);
-  box-shadow: 0 0 0 1px var(--surface-elevated) inset;
-  transition: background var(--t-medium) var(--ease-out), box-shadow var(--t-medium) var(--ease-out);
-}
-.status-none { background: var(--idle); opacity: 0.5; }
-.status-idle { background: var(--idle); }
-.status-working {
-  background: var(--working);
-  box-shadow: 0 0 10px rgba(91, 141, 239, 0.6);
-  animation: dot-breathe 1.6s ease-in-out infinite;
-}
-.status-needs_input {
-  background: var(--needs-input);
-  box-shadow: 0 0 10px rgba(230, 200, 76, 0.6);
-  animation: dot-attention 2.2s ease-in-out infinite;
-}
-.status-done {
-  background: var(--success);
-  box-shadow: 0 0 8px rgba(127, 189, 127, 0.3);
-}
-.status-crashed {
-  background: var(--crashed);
-  box-shadow: 0 0 8px rgba(217, 102, 102, 0.4);
-}
-
-/* —— scrollbars (subtle, terminal-app style) —— */
+/* —— scrollbars —— */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border-subtle); border-radius: 4px; }
@@ -550,64 +941,28 @@ button[type="submit"]:hover:not(:disabled) {
 
 /* —— keyframes —— */
 @keyframes row-enter {
-  0% {
-    opacity: 0;
-    transform: translateX(-8px);
-  }
-  100% {
-    opacity: 1;
-    transform: translateX(0);
-  }
+  0% { opacity: 0; transform: translateX(-8px); }
+  100% { opacity: 1; transform: translateX(0); }
 }
 @keyframes accent-glow {
-  0% {
-    opacity: 0;
-    transform: scaleY(0.4);
-  }
-  100% {
-    opacity: 1;
-    transform: scaleY(1);
-  }
+  0% { opacity: 0; transform: scaleY(0.4); }
+  100% { opacity: 1; transform: scaleY(1); }
 }
 @keyframes dot-breathe {
-  0%, 100% {
-    opacity: 1;
-    box-shadow: 0 0 10px rgba(91, 141, 239, 0.6);
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.55;
-    box-shadow: 0 0 0 rgba(91, 141, 239, 0);
-    transform: scale(0.9);
-  }
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.55; transform: scale(0.9); }
 }
 @keyframes dot-attention {
-  0%, 100% {
-    transform: scale(1);
-    box-shadow: 0 0 10px rgba(230, 200, 76, 0.6);
-  }
-  50% {
-    transform: scale(1.18);
-    box-shadow: 0 0 18px rgba(230, 200, 76, 0.85);
-  }
-}
-@keyframes label-attention {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.7; }
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.18); }
 }
 @keyframes pane-fade-in {
-  0% {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  100% {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  0% { opacity: 0; transform: translateY(8px); }
+  100% { opacity: 1; transform: translateY(0); }
 }
 @keyframes check-pop {
-  0% { transform: rotate(45deg) scale(0); }
-  60% { transform: rotate(45deg) scale(1.2); }
+  0%   { transform: rotate(45deg) scale(0); }
+  60%  { transform: rotate(45deg) scale(1.2); }
   100% { transform: rotate(45deg) scale(1); }
 }
 @keyframes shake {
@@ -618,7 +973,6 @@ button[type="submit"]:hover:not(:disabled) {
   80% { transform: translateX(2px); }
 }
 
-/* Respect reduced-motion preference */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;

@@ -7,7 +7,7 @@ use std::time::Instant;
 use tessera_render::{
     geometry::{Color, Rect},
     glyph_cache::GlyphCache,
-    renderer::{Renderer, RenderTarget},
+    renderer::{RenderTarget, Renderer},
     resources::Resources,
     scene::{GlyphEntry, RectEntry, Scene},
     DEFAULT_ATLAS_SIZE,
@@ -29,7 +29,11 @@ fn frame_time_budget() {
     let (w, h) = (1280u32, 720u32);
     let target = res.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("perf"),
-        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -87,7 +91,9 @@ fn frame_time_budget() {
             [w as f32, h as f32],
         );
         // wgpu 29: PollType::wait_indefinitely() replaces Maintain::Wait
-        res.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        res.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .unwrap();
         let ms = t0.elapsed().as_secs_f64() * 1000.0;
         times.push(ms);
     }
@@ -95,7 +101,7 @@ fn frame_time_budget() {
     times.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let median = times[times.len() / 2];
     let p99 = times[(times.len() as f64 * 0.99) as usize];
-    println!("frame ms: median={:.2} p99={:.2}", median, p99);
+    println!("frame ms: median={median:.2} p99={p99:.2}");
     assert!(median <= 5.0, "median frame time {median:.2}ms > 5.0ms");
     assert!(p99 <= 16.6, "p99 frame time {p99:.2}ms > 16.6ms");
 }

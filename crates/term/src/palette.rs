@@ -27,22 +27,22 @@ impl ColorPalette {
         let mut table = [Color::rgb(0, 0, 0); 256];
 
         let xterm16: [Color; 16] = [
-            Color::rgb(0x00, 0x00, 0x00),   // 0 black
-            Color::rgb(0xCD, 0x00, 0x00),   // 1 red
-            Color::rgb(0x00, 0xCD, 0x00),   // 2 green
-            Color::rgb(0xCD, 0xCD, 0x00),   // 3 yellow
-            Color::rgb(0x00, 0x00, 0xEE),   // 4 blue
-            Color::rgb(0xCD, 0x00, 0xCD),   // 5 magenta
-            Color::rgb(0x00, 0xCD, 0xCD),   // 6 cyan
-            Color::rgb(0xE5, 0xE5, 0xE5),   // 7 white
-            Color::rgb(0x7F, 0x7F, 0x7F),   // 8 bright black
-            Color::rgb(0xFF, 0x00, 0x00),   // 9 bright red
-            Color::rgb(0x00, 0xFF, 0x00),   // 10 bright green
-            Color::rgb(0xFF, 0xFF, 0x00),   // 11 bright yellow
-            Color::rgb(0x5C, 0x5C, 0xFF),   // 12 bright blue
-            Color::rgb(0xFF, 0x00, 0xFF),   // 13 bright magenta
-            Color::rgb(0x00, 0xFF, 0xFF),   // 14 bright cyan
-            Color::rgb(0xFF, 0xFF, 0xFF),   // 15 bright white
+            Color::rgb(0x00, 0x00, 0x00), // 0 black
+            Color::rgb(0xCD, 0x00, 0x00), // 1 red
+            Color::rgb(0x00, 0xCD, 0x00), // 2 green
+            Color::rgb(0xCD, 0xCD, 0x00), // 3 yellow
+            Color::rgb(0x00, 0x00, 0xEE), // 4 blue
+            Color::rgb(0xCD, 0x00, 0xCD), // 5 magenta
+            Color::rgb(0x00, 0xCD, 0xCD), // 6 cyan
+            Color::rgb(0xE5, 0xE5, 0xE5), // 7 white
+            Color::rgb(0x7F, 0x7F, 0x7F), // 8 bright black
+            Color::rgb(0xFF, 0x00, 0x00), // 9 bright red
+            Color::rgb(0x00, 0xFF, 0x00), // 10 bright green
+            Color::rgb(0xFF, 0xFF, 0x00), // 11 bright yellow
+            Color::rgb(0x5C, 0x5C, 0xFF), // 12 bright blue
+            Color::rgb(0xFF, 0x00, 0xFF), // 13 bright magenta
+            Color::rgb(0x00, 0xFF, 0xFF), // 14 bright cyan
+            Color::rgb(0xFF, 0xFF, 0xFF), // 15 bright white
         ];
         for (i, c) in xterm16.iter().enumerate() {
             table[i] = *c;
@@ -76,13 +76,11 @@ impl ColorPalette {
             ColorAttribute::Default => self.default_fg,
             ColorAttribute::PaletteIndex(idx) => self.table[*idx as usize],
             ColorAttribute::TrueColorWithDefaultFallback(srgb)
-            | ColorAttribute::TrueColorWithPaletteFallback(srgb, _) => {
-                Color::rgb(
-                    (srgb.0 * 255.0) as u8,
-                    (srgb.1 * 255.0) as u8,
-                    (srgb.2 * 255.0) as u8,
-                )
-            }
+            | ColorAttribute::TrueColorWithPaletteFallback(srgb, _) => Color::rgb(
+                (srgb.0 * 255.0) as u8,
+                (srgb.1 * 255.0) as u8,
+                (srgb.2 * 255.0) as u8,
+            ),
         }
     }
 
@@ -92,13 +90,11 @@ impl ColorPalette {
             ColorAttribute::Default => self.default_bg,
             ColorAttribute::PaletteIndex(idx) => self.table[*idx as usize],
             ColorAttribute::TrueColorWithDefaultFallback(srgb)
-            | ColorAttribute::TrueColorWithPaletteFallback(srgb, _) => {
-                Color::rgb(
-                    (srgb.0 * 255.0) as u8,
-                    (srgb.1 * 255.0) as u8,
-                    (srgb.2 * 255.0) as u8,
-                )
-            }
+            | ColorAttribute::TrueColorWithPaletteFallback(srgb, _) => Color::rgb(
+                (srgb.0 * 255.0) as u8,
+                (srgb.1 * 255.0) as u8,
+                (srgb.2 * 255.0) as u8,
+            ),
         }
     }
 }

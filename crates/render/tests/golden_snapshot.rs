@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use tessera_render::{
     geometry::{Color, Rect},
     glyph_cache::GlyphCache,
-    renderer::{Renderer, RenderTarget},
+    renderer::{RenderTarget, Renderer},
     resources::Resources,
     scene::{GlyphEntry, RectEntry, Scene},
 };
@@ -26,7 +26,11 @@ fn render_and_readback(name: &str) -> (u32, u32, Vec<u8>) {
     let (w, h) = (512u32, 256u32);
     let target = res.device.create_texture(&wgpu::TextureDescriptor {
         label: Some(name),
-        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -100,14 +104,20 @@ fn render_and_readback(name: &str) -> (u32, u32, Vec<u8>) {
                 rows_per_image: None,
             },
         },
-        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
     );
     res.queue.submit(Some(enc.finish()));
 
     let slice = staging.slice(..);
     let (tx, rx) = std::sync::mpsc::channel();
     slice.map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
-    res.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    res.device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .unwrap();
     rx.recv().unwrap().unwrap();
     let data = slice.get_mapped_range();
 
@@ -122,14 +132,13 @@ fn render_and_readback(name: &str) -> (u32, u32, Vec<u8>) {
 
 #[test]
 fn tessera_word_snapshot() {
-    let (w, h, pixels) =
-        match std::panic::catch_unwind(|| render_and_readback("tessera_word")) {
-            Ok(v) => v,
-            Err(_) => {
-                eprintln!("no GPU; skip");
-                return;
-            }
-        };
+    let (w, h, pixels) = match std::panic::catch_unwind(|| render_and_readback("tessera_word")) {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!("no GPU; skip");
+            return;
+        }
+    };
 
     let path = snapshot_path("tessera_word");
     if !path.exists() {
@@ -147,5 +156,8 @@ fn tessera_word_snapshot() {
             diffs += 1;
         }
     }
-    assert!(diffs < 100, "{diffs} pixels differ by more than 8/255 from snapshot");
+    assert!(
+        diffs < 100,
+        "{diffs} pixels differ by more than 8/255 from snapshot"
+    );
 }

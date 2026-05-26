@@ -5517,6 +5517,7 @@ dependencies = [
  "chrono",
  "dirs 5.0.1",
  "libc",
+ "raw-window-handle",
  "rusqlite",
  "serde",
  "serde_json",
@@ -5525,9 +5526,9 @@ dependencies = [
  "tessera-core",
  "tessera-git",
  "tessera-hook",
- "tessera-overlay",
  "tessera-pty",
  "tessera-store",
+ "tessera-term",
  "tessera-workspace",
  "tokio",
  "tracing",
@@ -5579,12 +5580,14 @@ dependencies = [
 name = "tessera-overlay"
 version = "0.1.0"
 dependencies = [
+ "raw-window-handle",
  "tessera-render",
  "tessera-term",
  "tracing",
  "uuid",
  "wgpu",
  "winit",
+ "x11-dl",
 ]
 
 [[package]]

@@ -71,16 +71,15 @@ impl Resources {
             force_fallback_adapter: false,
         }))?;
 
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("tessera-render headless device"),
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits::default(),
                 memory_hints: wgpu::MemoryHints::default(),
                 experimental_features: Default::default(),
                 trace: Default::default(),
-            },
-        ))?;
+            }))?;
 
         Ok(Self {
             instance,

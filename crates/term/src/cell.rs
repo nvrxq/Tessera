@@ -1,9 +1,9 @@
 //! `GridCell` — a flat, ready-to-render representation of one terminal cell.
 
+use crate::palette::ColorPalette;
 use tessera_render::geometry::Color;
 use unicode_normalization::UnicodeNormalization;
 use wezterm_term::Cell as WezCell;
-use crate::palette::ColorPalette;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct GridCell {
@@ -16,6 +16,12 @@ pub struct GridCell {
     pub bold: bool,
     pub italic: bool,
     pub underline: bool,
+    /// Whether the cell wants a double-underline (SGR 21). Distinct from
+    /// `underline` so the renderer can match Warp's
+    /// `Flags::DOUBLE_UNDERLINE` branch and draw a 2×-thickness rect.
+    pub double_underline: bool,
+    /// SGR 9 strikethrough.
+    pub strikethrough: bool,
 }
 
 impl GridCell {
@@ -27,7 +33,21 @@ impl GridCell {
     /// these codepoints as decorative "small text" — renders unreadably tiny.
     pub fn from_wez(cell: &WezCell, palette: &ColorPalette) -> Self {
         let s = cell.str();
-        let ch = s.nfkc().next().unwrap_or(' ');
+        // Fast path: pure ASCII bytes are NFKC-identical, skip the
+        // normalization machinery entirely. 1920 cells × NFKC per snapshot
+        // was eating ~200-500 µs of `snap` time; almost every cell in a
+        // typical claude-code TUI is ASCII (block-drawing chars + box
+        // glyphs that live in the > U+007F range are the exception).
+        // `len() == 1` is a sufficient test in UTF-8: every single-byte
+        // UTF-8 sequence is by definition ASCII (codepoints 0x00–0x7F).
+        // We still assert it in debug to catch a hypothetical wezterm-term
+        // 8-bit / Latin-1 mode that hands back a raw high byte.
+        let ch = if s.len() == 1 {
+            debug_assert!(s.is_ascii(), "single-byte cell str must be ASCII; got {s:?}");
+            s.as_bytes()[0] as char
+        } else {
+            s.nfkc().next().unwrap_or(' ')
+        };
         let a = cell.attrs();
         Self {
             ch,
@@ -35,7 +55,15 @@ impl GridCell {
             bg: palette.resolve_bg(&a.background()),
             bold: matches!(a.intensity(), wezterm_term::Intensity::Bold),
             italic: a.italic(),
-            underline: !matches!(a.underline(), wezterm_term::Underline::None),
+            underline: matches!(
+                a.underline(),
+                wezterm_term::Underline::Single
+                    | wezterm_term::Underline::Curly
+                    | wezterm_term::Underline::Dotted
+                    | wezterm_term::Underline::Dashed
+            ),
+            double_underline: matches!(a.underline(), wezterm_term::Underline::Double),
+            strikethrough: a.strikethrough(),
         }
     }
 }
@@ -93,5 +121,24 @@ mod tests {
         assert!(g.bold);
         assert!(g.italic);
         assert!(g.underline);
+        assert!(!g.double_underline);
+        assert!(!g.strikethrough);
+    }
+
+    #[test]
+    fn double_underline_and_strikethrough_split() {
+        let pal = ColorPalette::tessera_dark();
+        let mut a = CellAttributes::default();
+        a.set_underline(wezterm_term::Underline::Double);
+        let cell = WezCell::new('X', a);
+        let g = GridCell::from_wez(&cell, &pal);
+        assert!(g.double_underline, "double underline should be tracked");
+        assert!(!g.underline, "single-underline flag stays off for Double");
+
+        let mut a = CellAttributes::default();
+        a.set_strikethrough(true);
+        let cell = WezCell::new('X', a);
+        let g = GridCell::from_wez(&cell, &pal);
+        assert!(g.strikethrough);
     }
 }

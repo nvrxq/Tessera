@@ -38,7 +38,20 @@ fn vs(@builtin(vertex_index) vi: u32, inst: InstanceIn) -> VertexOut {
 
 @fragment
 fn fs(in: VertexOut) -> @location(0) vec4<f32> {
-    // Atlas stores alpha-as-mask in the A channel; RGB is 1.
-    let mask = textureSample(atlas, atlas_sampler, in.uv).a;
-    return vec4(in.color.rgb, in.color.a * mask);
+    // Atlas storage convention (see glyph_cache.rs):
+    //   RGB = per-subpixel coverage (LCD-style mask from swash::Format::Subpixel)
+    //   A   = max(R, G, B) — single-channel fallback / blend gate
+    //
+    // Output is PREMULTIPLIED alpha:
+    //   rgb = color.rgb * cov.rgb * color.a
+    //   a   = cov.a            * color.a
+    // Paired with pipeline blend (One, OneMinusSrcAlpha) this gives:
+    //   out.rgb = color.rgb * cov.rgb * alpha + dst.rgb * (1 - cov.a * alpha)
+    // i.e. RGB is masked per-subpixel (the LCD win), the destination is
+    // attenuated by the *coarsest* coverage (avoids haloing). For terminal
+    // palettes (bright fg on dark bg) the per-channel divergence is small
+    // enough that this approximation reads identical to dual-source LCD.
+    let cov = textureSample(atlas, atlas_sampler, in.uv);
+    let alpha = in.color.a;
+    return vec4(in.color.rgb * cov.rgb * alpha, cov.a * alpha);
 }

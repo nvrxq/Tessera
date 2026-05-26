@@ -12,6 +12,10 @@ wgpu = "=29.0.3"
 winit = "=0.30.9"
 tracing = { workspace = true }
 uuid = { workspace = true }
+raw-window-handle = "0.6"
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+x11-dl = "2.21"
 
 [dev-dependencies]
 wgpu = "=29.0.3"

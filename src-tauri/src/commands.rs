@@ -34,6 +34,7 @@ pub fn pty_spawn(
         cwd: args.cwd,
         cols: args.cols,
         rows: args.rows,
+        env: Vec::new(),
     };
     let session_id = state.spawn(cfg).map_err(|e| e.to_string())?;
     Ok(SpawnResponse { session_id })
@@ -66,6 +67,68 @@ pub fn pty_resize(
 #[tauri::command]
 pub fn pty_kill(state: State<'_, SupervisorState>, session_id: Uuid) -> Result<(), String> {
     state.kill(session_id).map_err(|e| e.to_string())
+}
+
+// ---- Filesystem helpers ----
+
+/// List child directories of `parent` whose name starts with `prefix`. Used by
+/// the folder-path autocomplete in NewWorkspaceForm. Returns absolute paths.
+/// Caps the result at 16 entries and skips hidden dirs unless prefix starts with '.'.
+#[tauri::command]
+pub fn list_directories(input: String) -> Result<Vec<String>, String> {
+    let expanded = if let Some(stripped) = input.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            home.join(stripped).to_string_lossy().into_owned()
+        } else {
+            input.clone()
+        }
+    } else if input == "~" {
+        dirs::home_dir()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or(input.clone())
+    } else {
+        input.clone()
+    };
+
+    let path = std::path::PathBuf::from(&expanded);
+    // Decide the directory to list and the prefix to match against.
+    let (parent, prefix) = if expanded.ends_with('/') || (path.is_dir() && expanded == "/") {
+        (path.clone(), String::new())
+    } else if path.is_dir() {
+        // exact-dir match: also list its children
+        (path.clone(), String::new())
+    } else {
+        let parent = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+        let prefix = path
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        (parent, prefix)
+    };
+
+    if !parent.is_dir() {
+        return Ok(Vec::new());
+    }
+    let show_hidden = prefix.starts_with('.');
+
+    let mut out: Vec<String> = std::fs::read_dir(&parent)
+        .map_err(|e| e.to_string())?
+        .filter_map(|res| res.ok())
+        .filter(|entry| entry.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !show_hidden && name.starts_with('.') {
+                return None;
+            }
+            if !prefix.is_empty() && !name.to_lowercase().starts_with(&prefix.to_lowercase()) {
+                return None;
+            }
+            Some(entry.path().to_string_lossy().into_owned())
+        })
+        .collect();
+    out.sort();
+    out.truncate(16);
+    Ok(out)
 }
 
 // ---- Workspace commands ----
@@ -140,11 +203,10 @@ pub fn workspace_create(
         }
     }
 
-    let sid = state
-        .spawn_agent(ws.id, 80, 24)
-        .map_err(|e| e.to_string())?;
-    let status = state.status_of(ws.id);
-    Ok(WorkspaceDto::from_workspace(ws, Some(sid), status))
+    // Don't spawn the agent here — the frontend Terminal component spawns
+    // after measuring its container, so claude starts at the correct PTY
+    // size and doesn't have to redraw on first SIGWINCH.
+    Ok(WorkspaceDto::from_workspace(ws, None, None))
 }
 
 #[tauri::command]
@@ -166,9 +228,11 @@ pub fn workspace_list(
 pub fn workspace_spawn_agent(
     state: State<'_, WorkspaceServiceState>,
     workspace_id: Uuid,
+    cols: u16,
+    rows: u16,
 ) -> Result<Uuid, String> {
     state
-        .spawn_agent(workspace_id, 80, 24)
+        .spawn_agent(workspace_id, cols, rows)
         .map_err(|e| e.to_string())
 }
 
@@ -181,46 +245,44 @@ pub fn workspace_delete(
     state.delete(workspace_id, force).map_err(|e| e.to_string())
 }
 
-// ---- Overlay window ----
+// ---- Terminal grid (Canvas2D backend) ----
 
-use tessera_overlay::{Bounds as OverlayBounds, Handle as OverlayHandle};
+use std::collections::HashMap;
+use std::sync::Mutex;
 
+use crate::terminal::TerminalRegistry;
+
+pub type TerminalRegistryState = std::sync::Arc<TerminalRegistry>;
+/// Last-known (cols, rows) per session — used by the PTY pump to spawn a
+/// Term at the right size on the first byte chunk.
+pub type GridSizesState = std::sync::Arc<Mutex<HashMap<Uuid, (u16, u16)>>>;
+
+/// Frontend tells the backend the desired grid size for a session. Resizes
+/// both the wezterm-term parser AND remembers the size for any future
+/// lazy-spawned Term in the same session id.
+///
+/// After the resize, immediately emits a fresh `term_snapshot` event with
+/// the full grid. This recovers the frontend if it missed the initial
+/// snapshot emit (e.g. listener registration raced ahead of the first
+/// `claude` stdout chunk on spawn) — the frontend's local grid is
+/// guaranteed to be re-synced to backend state every time it (re)connects.
 #[tauri::command]
-pub fn overlay_set_bounds(
-    overlay: tauri::State<'_, std::sync::Arc<OverlayHandle>>,
-    x: i32,
-    y: i32,
-    w: u32,
-    h: u32,
-) -> Result<(), String> {
-    overlay.set_bounds(OverlayBounds::new(x, y, w, h));
-    Ok(())
-}
-
-#[tauri::command]
-pub fn overlay_set_visible(
-    overlay: tauri::State<'_, std::sync::Arc<OverlayHandle>>,
-    visible: bool,
-) -> Result<(), String> {
-    overlay.set_visible(visible);
-    Ok(())
-}
-
-#[tauri::command]
-pub fn overlay_select_session(
-    overlay: tauri::State<'_, std::sync::Arc<OverlayHandle>>,
-    session_id: Option<Uuid>,
-) -> Result<(), String> {
-    overlay.select_session(session_id);
-    Ok(())
-}
-
-#[tauri::command]
-pub fn overlay_resize_grid(
-    overlay: tauri::State<'_, std::sync::Arc<OverlayHandle>>,
+pub fn terminal_resize(
+    app: tauri::AppHandle,
+    registry: tauri::State<'_, TerminalRegistryState>,
+    sizes: tauri::State<'_, GridSizesState>,
+    session_id: Uuid,
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    overlay.resize_grid(cols, rows);
+    use tauri::Emitter;
+    sizes
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(session_id, (cols, rows));
+    registry.resize(session_id, cols, rows);
+    if let Some(snap) = registry.snapshot(session_id) {
+        let _ = app.emit("term_snapshot", snap);
+    }
     Ok(())
 }

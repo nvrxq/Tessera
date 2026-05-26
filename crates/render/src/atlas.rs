@@ -1,4 +1,4 @@
-use etagere::{AtlasAllocator, size2};
+use etagere::{size2, AtlasAllocator};
 
 /// Default size of the glyph atlas in pixels (square). Matches the warp-renderer spec §6.3.
 pub const DEFAULT_ATLAS_SIZE: u32 = 2048;
@@ -21,10 +21,15 @@ pub struct Atlas {
 
 impl Atlas {
     pub fn new(size: u32) -> Self {
-        Self { inner: AtlasAllocator::new(size2(size as i32, size as i32)), size }
+        Self {
+            inner: AtlasAllocator::new(size2(size as i32, size as i32)),
+            size,
+        }
     }
 
-    pub fn size(&self) -> u32 { self.size }
+    pub fn size(&self) -> u32 {
+        self.size
+    }
 
     pub fn allocate(&mut self, w: u32, h: u32) -> Option<AllocatedRegion> {
         let alloc = self.inner.allocate(size2(w as i32, h as i32))?;
@@ -39,6 +44,11 @@ impl Atlas {
         })
     }
 
+    /// Returns an allocation back to the atlas. Currently unused — we never
+    /// evict glyphs because the working set fits in a single 1024×1024 atlas
+    /// for the entire claude-code TUI. Kept here so a future LRU eviction
+    /// policy can wire up without re-deriving the etagere lifetime dance.
+    #[allow(dead_code)]
     pub fn deallocate(&mut self, id: etagere::AllocId) {
         self.inner.deallocate(id);
     }
@@ -64,7 +74,9 @@ mod tests {
         let mut allocs = Vec::new();
         while let Some(r) = a.allocate(32, 32) {
             allocs.push(r);
-            if allocs.len() > 10 { panic!("atlas should have filled by now"); }
+            if allocs.len() > 10 {
+                panic!("atlas should have filled by now");
+            }
         }
         // After loop exits, next must also fail.
         assert!(a.allocate(32, 32).is_none());

@@ -21,7 +21,9 @@ pub fn spawn(config: OverlayConfig) -> Handle {
     #[cfg(target_os = "linux")]
     {
         if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-            tracing::info!("overlay: Wayland session detected; positioning may be best-effort (spec §8.1)");
+            tracing::info!(
+                "overlay: Wayland session detected; positioning may be best-effort (spec §8.1)"
+            );
         }
     }
 

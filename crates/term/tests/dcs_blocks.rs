@@ -43,7 +43,13 @@ fn dcs_emits_end_block_event() {
     let events = t.take_block_events();
     assert_eq!(events.len(), 1);
     assert!(
-        matches!(&events[0], BlockEvent::End { exit_code: Some(0), .. }),
+        matches!(
+            &events[0],
+            BlockEvent::End {
+                exit_code: Some(0),
+                ..
+            }
+        ),
         "got {:?}",
         events[0]
     );

@@ -11,6 +11,9 @@ pub struct SessionConfig {
     pub cwd: PathBuf,
     pub cols: u16,
     pub rows: u16,
+    /// Extra environment variables to layer on top of inherited ones. Used by
+    /// the shell-integration path to set ZDOTDIR (zsh) and similar.
+    pub env: Vec<(String, String)>,
 }
 
 /// Owns the writer / resizer / killer for a PTY child. The output stream is
@@ -36,6 +39,9 @@ impl PtySession {
         let mut cmd = CommandBuilder::new(&cfg.program);
         for a in &cfg.args {
             cmd.arg(a);
+        }
+        for (k, v) in &cfg.env {
+            cmd.env(k, v);
         }
         cmd.cwd(&cfg.cwd);
 
@@ -121,6 +127,7 @@ mod tests {
             cwd: std::env::temp_dir(),
             cols: 80,
             rows: 24,
+            env: Vec::new(),
         }
     }
 

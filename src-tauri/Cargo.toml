@@ -8,6 +8,13 @@ license.workspace = true
 name = "tessera_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+# default empty so `cargo run` / debug builds still use the vite dev server.
+# release builds must pass `--features custom-protocol` (or use a CARGO alias) to
+# tell Tauri to serve the embedded frontendDist instead of devUrl.
+default = []
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -19,7 +26,7 @@ tessera-git = { path = "../crates/git" }
 tessera-pty = { path = "../crates/pty" }
 tessera-workspace = { path = "../crates/workspace" }
 tessera-hook = { path = "../crates/hook" }
-tessera-overlay = { path = "../crates/overlay" }
+tessera-term = { path = "../crates/term" }
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -32,3 +39,4 @@ base64 = "0.22"
 dirs = "5"
 rusqlite = { version = "0.34", features = ["bundled"] }
 libc = "0.2"
+raw-window-handle = "0.6"

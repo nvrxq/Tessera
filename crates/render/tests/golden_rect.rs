@@ -22,7 +22,11 @@ fn rect_pipeline_draws_solid_pixels() {
 
     let target = res.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("target"),
-        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -84,14 +88,20 @@ fn rect_pipeline_draws_solid_pixels() {
                 rows_per_image: None,
             },
         },
-        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
     );
     res.queue.submit(Some(enc.finish()));
 
     let slice = staging.slice(..);
     let (tx, rx) = std::sync::mpsc::channel();
     slice.map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
-    res.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    res.device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .unwrap();
     rx.recv().unwrap().unwrap();
     let data = slice.get_mapped_range();
 
@@ -99,6 +109,6 @@ fn rect_pipeline_draws_solid_pixels() {
     let i = (64 * bpr + 64 * 4) as usize;
     let px = [data[i], data[i + 1], data[i + 2], data[i + 3]];
 
-    assert!(px[0] > 100, "center pixel not lit: {:?}", px);
-    assert!(px[3] == 255, "center pixel not opaque: {:?}", px);
+    assert!(px[0] > 100, "center pixel not lit: {px:?}");
+    assert!(px[3] == 255, "center pixel not opaque: {px:?}");
 }

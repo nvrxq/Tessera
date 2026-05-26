@@ -17,14 +17,24 @@ const FONT: &[u8] = include_bytes!("../../render/assets/GeistMono-Regular.ttf");
 fn overlay_render_path_works_offscreen() {
     let res = match Resources::new_headless() {
         Ok(r) => r,
-        Err(_) => { eprintln!("no GPU; skipping"); return; }
+        Err(_) => {
+            eprintln!("no GPU; skipping");
+            return;
+        }
     };
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;
     let (w, h) = (512u32, 256u32);
     let target = res.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("overlay-headless"),
-        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-        mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format,
+        size: wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         view_formats: &[],
     });
@@ -45,7 +55,12 @@ fn overlay_render_path_works_offscreen() {
     for ch in text.chars() {
         if let Some(g) = glyphs.get_or_rasterize(ch, 13.0) {
             scene.push_glyph(GlyphEntry {
-                rect: Rect::new(x + g.bearing[0], baseline - g.bearing[1], g.size_px[0] as f32, g.size_px[1] as f32),
+                rect: Rect::new(
+                    x + g.bearing[0],
+                    baseline - g.bearing[1],
+                    g.size_px[0] as f32,
+                    g.size_px[1] as f32,
+                ),
                 color: Color::rgb(232, 232, 230),
                 uv_min: g.region.uv_min,
                 uv_max: g.region.uv_max,
@@ -55,7 +70,9 @@ fn overlay_render_path_works_offscreen() {
     }
 
     renderer.render_with_atlas(
-        &res.device, &res.queue, &scene,
+        &res.device,
+        &res.queue,
+        &scene,
         RenderTarget::Texture(&target),
         [w as f32, h as f32],
         &mut glyphs,

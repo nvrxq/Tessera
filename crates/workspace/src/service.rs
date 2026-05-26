@@ -70,6 +70,7 @@ impl WorkspaceService {
             detected_worktree: None,
             detected_branch: None,
             dangerous_skip_permissions,
+            has_prior_session: false,
         };
 
         let conn = self.db.lock().unwrap();
@@ -105,24 +106,48 @@ impl WorkspaceService {
         Ok(())
     }
 
-    /// Spawn the workspace's agent. Defaults to `claude`. If the workspace
-    /// has `dangerous_skip_permissions = true`, passes `--dangerously-skip-permissions`.
+    /// Spawn `claude` directly in the workspace folder. No shell wrapper,
+    /// no integration scripts — Tessera is a Claude Code TUI viewer, not a
+    /// general terminal. Pass `--continue` if the workspace has a prior
+    /// session so claude resumes its previous conversation.
     pub fn spawn_agent(&self, workspace_id: Uuid, cols: u16, rows: u16) -> Result<Uuid> {
         let workspace = {
             let conn = self.db.lock().unwrap();
             tessera_store::workspaces::get(&conn, workspace_id)?
                 .ok_or_else(|| anyhow::anyhow!("workspace {workspace_id} not found"))?
         };
-        let args: &[&str] = if workspace.dangerous_skip_permissions {
-            &["--dangerously-skip-permissions"]
-        } else {
-            &[]
-        };
-        self.spawn_agent_with_program(workspace_id, "claude", args, cols, rows)
+        let program = "claude".to_string();
+        let mut args: Vec<String> = Vec::new();
+        if workspace.dangerous_skip_permissions {
+            args.push("--dangerously-skip-permissions".to_string());
+        }
+        if workspace.has_prior_session {
+            args.push("--continue".to_string());
+        }
+        let env: Vec<(String, String)> = Vec::new();
+        let session_id = self.spawn_session_inner(
+            workspace_id,
+            &workspace.worktree_path,
+            &program,
+            &args,
+            env,
+            cols,
+            rows,
+        )?;
+        // Keep the prior-session bookkeeping for any callers still relying on
+        // it; cheap and harmless even in the shell-default world.
+        if !workspace.has_prior_session {
+            let conn = self.db.lock().unwrap();
+            if let Err(e) = tessera_store::workspaces::mark_session_started(&conn, workspace_id) {
+                tracing::warn!(error = %e, "mark_session_started failed");
+            }
+        }
+        Ok(session_id)
     }
 
     /// Like `spawn_agent` but lets callers pick the program — used by tests to
-    /// substitute `cat` for `claude`.
+    /// substitute `cat` for the default shell. **No** Tessera integration is
+    /// loaded here — direct spawn.
     pub fn spawn_agent_with_program(
         &self,
         workspace_id: Uuid,
@@ -131,20 +156,45 @@ impl WorkspaceService {
         cols: u16,
         rows: u16,
     ) -> Result<Uuid> {
-        use tessera_pty::session::SessionConfig;
-
         let workspace = {
             let conn = self.db.lock().unwrap();
             tessera_store::workspaces::get(&conn, workspace_id)?
                 .ok_or_else(|| anyhow::anyhow!("workspace {workspace_id} not found"))?
         };
-
-        let cfg = SessionConfig {
-            program: program.to_string(),
-            args: args.iter().map(|s| s.to_string()).collect(),
-            cwd: workspace.worktree_path.clone(),
+        self.spawn_session_inner(
+            workspace_id,
+            &workspace.worktree_path,
+            program,
+            &args.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            Vec::new(),
             cols,
             rows,
+        )
+    }
+
+    // Each parameter has a distinct domain meaning (program, args, env,
+    // cwd, dims, workspace_id) and bundling them into a struct just to
+    // satisfy clippy would force callers to construct a builder for a
+    // private helper. The clarity tradeoff is worth the lint suppression.
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_session_inner(
+        &self,
+        workspace_id: Uuid,
+        cwd: &std::path::Path,
+        program: &str,
+        args: &[String],
+        env: Vec<(String, String)>,
+        cols: u16,
+        rows: u16,
+    ) -> Result<Uuid> {
+        use tessera_pty::session::SessionConfig;
+        let cfg = SessionConfig {
+            program: program.to_string(),
+            args: args.to_vec(),
+            cwd: cwd.to_path_buf(),
+            cols,
+            rows,
+            env,
         };
         let session_id = self.supervisor.spawn(cfg)?;
         self.sessions

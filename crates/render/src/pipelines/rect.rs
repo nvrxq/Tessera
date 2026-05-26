@@ -1,5 +1,5 @@
-use bytemuck::{Pod, Zeroable};
 use crate::scene::Scene;
+use bytemuck::{Pod, Zeroable};
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
@@ -130,13 +130,17 @@ impl RectPipeline {
         scene: &Scene,
         screen: [f32; 2],
     ) -> u32 {
-        let instances: Vec<RectInstance> = scene.rects.iter().map(|e| RectInstance {
-            pos: [e.rect.x, e.rect.y],
-            size: [e.rect.w, e.rect.h],
-            color: e.color.to_linear(),
-            corner_radius: e.corner_radius,
-            _pad: [0.0; 3],
-        }).collect();
+        let instances: Vec<RectInstance> = scene
+            .rects
+            .iter()
+            .map(|e| RectInstance {
+                pos: [e.rect.x, e.rect.y],
+                size: [e.rect.w, e.rect.h],
+                color: e.color.to_linear(),
+                corner_radius: e.corner_radius,
+                _pad: [0.0; 3],
+            })
+            .collect();
 
         if instances.len() as u32 > self.instance_capacity {
             let new_cap = (instances.len() as u32).next_power_of_two();
@@ -153,7 +157,10 @@ impl RectPipeline {
             queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instances));
         }
 
-        let u = Uniforms { screen_size: screen, _pad: [0.0; 2] };
+        let u = Uniforms {
+            screen_size: screen,
+            _pad: [0.0; 2],
+        };
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&u));
 
         instances.len() as u32

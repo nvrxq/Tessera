@@ -5,14 +5,6 @@ use swash::FontRef;
 
 use crate::atlas::{AllocatedRegion, Atlas};
 
-/// Loose monospace leading. Multiplied by `px_size` to get pixel line height.
-/// Matches Warp's `line_height_ratio` default.
-const LINE_HEIGHT_RATIO: f32 = 1.4;
-
-/// Fraction of the line that sits above the baseline. The remaining 20%
-/// is reserved for descenders. From Warp's `DEFAULT_TOP_BOTTOM_RATIO`.
-const BASELINE_RATIO: f32 = 0.8;
-
 #[derive(Clone, Debug)]
 pub struct GlyphMetrics {
     pub advance: f32,
@@ -21,14 +13,35 @@ pub struct GlyphMetrics {
     pub region: AllocatedRegion,
 }
 
+/// Font weight slot in the cache. Geist Mono ships Regular + Bold with
+/// identical typo metrics (UPM=1000, typoAsc=1005, typoDesc=-295, xAvg=600),
+/// so the cell grid stays uniform between weights — only the glyph
+/// rasterisation differs.
+#[derive(Hash, PartialEq, Eq, Clone, Copy, Debug)]
+pub enum FontWeight {
+    Regular,
+    Bold,
+}
+
+impl FontWeight {
+    #[inline]
+    fn idx(self) -> u8 {
+        match self {
+            FontWeight::Regular => 0,
+            FontWeight::Bold => 1,
+        }
+    }
+}
+
 #[derive(Hash, PartialEq, Eq, Clone, Copy)]
 struct CacheKey {
+    weight: u8,
     glyph_id: u16,
     size_q: u32,
 }
 
 pub struct GlyphCache<'a> {
-    font: FontRef<'a>,
+    fonts: [FontRef<'a>; 2], // [Regular, Bold] — indexed by FontWeight::idx
     ctx: ScaleContext,
     atlas: Atlas,
     pub atlas_pixels: Vec<u8>, // RGBA8, atlas.size² * 4
@@ -39,11 +52,23 @@ pub struct GlyphCache<'a> {
 }
 
 impl<'a> GlyphCache<'a> {
+    /// Single-weight constructor — bold slot aliases Regular. Kept for tests
+    /// and callers that don't care about weight dispatch.
     pub fn new(font_bytes: &'a [u8], atlas_size: u32) -> Option<Self> {
-        let font = FontRef::from_index(font_bytes, 0)?;
+        Self::new_with_bold(font_bytes, font_bytes, atlas_size)
+    }
+
+    /// Two-weight constructor: Regular + Bold from separate font files.
+    pub fn new_with_bold(
+        regular_bytes: &'a [u8],
+        bold_bytes: &'a [u8],
+        atlas_size: u32,
+    ) -> Option<Self> {
+        let reg = FontRef::from_index(regular_bytes, 0)?;
+        let bold = FontRef::from_index(bold_bytes, 0)?;
         let pixels = vec![0u8; (atlas_size * atlas_size * 4) as usize];
         Some(Self {
-            font,
+            fonts: [reg, bold],
             ctx: ScaleContext::new(),
             atlas: Atlas::new(atlas_size),
             atlas_pixels: pixels,
@@ -58,51 +83,113 @@ impl<'a> GlyphCache<'a> {
         self.atlas.size()
     }
 
-    pub fn cell_metrics(&self, px_size: f32) -> CellMetrics {
-        // Cell width: take 'M' advance from the font — monospaced fonts are
-        // uniform; 'M' is the canonical reference.
-        let charmap = self.font.charmap();
-        let gid = charmap.map('M');
-        let advance = self.font.glyph_metrics(&[]).scale(px_size).advance_width(gid);
+    #[inline]
+    fn font_for(&self, w: FontWeight) -> FontRef<'a> {
+        self.fonts[w.idx() as usize]
+    }
 
-        // Line height: use a fixed ratio of font size rather than trusting
-        // signed OpenType descender values directly. This follows Warp's
-        // approach in `warpdotdev/warp::warpui_core::text_layout` — see the
-        // `DEFAULT_TOP_BOTTOM_RATIO = 0.8` constant and `line_height_ratio`
-        // field. Apache 2.0; cited.
+    pub fn cell_metrics(&self, px_size: f32) -> CellMetrics {
+        // Port of Warp's `grid_cell_dimensions` + `calculate_grid_baseline_position`
+        // (warpdotdev/warp app/src/terminal/grid_size_util.rs lines 13–79,
+        // dual-licensed AGPL/MIT — we mirror the algorithm, not the source).
         //
-        // line_height = font_size × 1.4 (industry-standard "loose" monospace
-        // leading; matches Geist Mono's intended on-screen rhythm).
-        // baseline    = 80% from the top of the line, 20% below for descenders.
-        let line_height_px = (px_size * LINE_HEIGHT_RATIO).ceil();
-        let ascent = line_height_px * BASELINE_RATIO;
-        let descent = line_height_px - ascent;
+        // **The "приплюснуто" fix:** Warp's actual on-screen cells aren't
+        // just `real_font_height`. The formula is:
+        //
+        //   cell_h = (asc + desc + leading) × (line_height_ratio / DEFAULT_UI_LINE_HEIGHT_RATIO)
+        //
+        // where Warp's defaults are:
+        //   DEFAULT_LINE_HEIGHT_RATIO       = 1.4   (used in BLOCK grid)
+        //   DEFAULT_UI_LINE_HEIGHT_RATIO    = 1.2   (UI text divisor)
+        //   → effective multiplier on real font height = 1.4 / 1.2 ≈ 1.1667
+        //
+        // (see warp_core/src/ui/appearance.rs:117 and warpui_core's
+        // text_layout / elements/text + formatted_text_element)
+        //
+        // I previously used multiplier = 1.0 (raw font metrics) → cells
+        // came out 17 % shorter than Warp's. That's the missing breathing
+        // room the user kept calling "squashed".
+        let font = self.fonts[FontWeight::Regular.idx() as usize];
+        let charmap = font.charmap();
+
+        // Warp uses 'm' lowercase as the canonical advance probe (not 'M').
+        let gid = charmap.map('m');
+        let advance = font.glyph_metrics(&[]).scale(px_size).advance_width(gid);
+
+        // Pull REAL font metrics. swash returns positive descent (absolute).
+        let m = font.metrics(&[]).scale(px_size);
+
+        // Warp's line-height multiplier — see comment above.
+        const WARP_LINE_HEIGHT_RATIO: f32 = 1.4;
+        const WARP_UI_LINE_HEIGHT_RATIO: f32 = 1.2;
+        let ratio_multiplier = WARP_LINE_HEIGHT_RATIO / WARP_UI_LINE_HEIGHT_RATIO;
+
+        // Cell height = real font height × multiplier, ceil to integer pixel.
+        // Geist Mono at 20 px: (20.1 + 5.9 + 0) × 1.1667 = 30.33 → ceil 31.
+        let line_height_px = ((m.ascent + m.descent + m.leading) * ratio_multiplier)
+            .ceil()
+            .max(1.0);
+
+        // Baseline: same formula as Warp's `calculate_grid_baseline_position`,
+        // which uses `.min(1.0)` on the ratio multiplier — so descent stays
+        // at its native (un-scaled) value, and the extra height from the
+        // multiplier all goes ABOVE the baseline. That extra space is
+        // exactly the visual "air" Warp has and our earlier port lacked.
+        //   baseline_y = cell_h - leading.floor() - descent.floor() × min(ratio, 1.0)
+        // For Geist Mono at 20 px with ratio 1.1667 → min = 1.0:
+        //   31 - 0 - 5 = 26.  M cap-height ~14 px → glyph y ∈ [12, 26],
+        //   leaves 12 px breathing room above the cap (was 7 px before).
+        let baseline_scale = ratio_multiplier.min(1.0);
+        let baseline_y = line_height_px - m.leading.floor() - (m.descent * baseline_scale).floor();
+
+        let advance_px = advance.round().max(1.0);
+
         CellMetrics {
-            advance_px: advance.ceil(),
-            ascent,
-            descent,
-            line_gap: 0.0,
+            advance_px,
+            ascent: baseline_y,
+            descent: line_height_px - baseline_y,
+            line_gap: m.leading,
             line_height_px,
         }
     }
 
+    /// Convenience wrapper for callers that don't care about weight.
     pub fn get_or_rasterize(&mut self, ch: char, px_size: f32) -> Option<GlyphMetrics> {
-        let glyph_id = self.font.charmap().map(ch);
-        let key = CacheKey { glyph_id, size_q: (px_size * 4.0) as u32 };
+        self.get_or_rasterize_weighted(ch, FontWeight::Regular, px_size)
+    }
+
+    pub fn get_or_rasterize_weighted(
+        &mut self,
+        ch: char,
+        weight: FontWeight,
+        px_size: f32,
+    ) -> Option<GlyphMetrics> {
+        let font = self.font_for(weight);
+        let glyph_id = font.charmap().map(ch);
+        let key = CacheKey {
+            weight: weight.idx(),
+            glyph_id,
+            size_q: (px_size * 4.0) as u32,
+        };
         if let Some(g) = self.map.get(&key) {
             self.hits += 1;
             return Some(g.clone());
         }
         self.misses += 1;
 
-        let mut scaler = self.ctx.builder(self.font).size(px_size).hint(true).build();
-        // swash 0.2: Render methods take &mut self, build then call render separately.
+        let mut scaler = self.ctx.builder(font).size(px_size).hint(true).build();
+        // LCD subpixel rasterisation: swash returns 3 coverage bytes per pixel
+        // (R, G, B subpixel masks). Combined with per-channel blending in
+        // `glyph.wgsl` this gives the "freetype-like" crispness on Linux that
+        // straight `Format::Alpha` (single-channel grayscale) cannot. See
+        // Warp blog "Adventures in Text Rendering" for the misalignment-blur
+        // problem and Arkanis 2023 for the dual-blend treatment.
         let image = Render::new(&[
             Source::ColorOutline(0),
             Source::ColorBitmap(StrikeWith::BestFit),
             Source::Outline,
         ])
-        .format(Format::Alpha)
+        .format(Format::Subpixel)
         .render(&mut scaler, glyph_id)?;
 
         let w = image.placement.width;
@@ -113,23 +200,92 @@ impl<'a> GlyphCache<'a> {
 
         let region = self.atlas.allocate(w, h)?;
         let atlas_w = self.atlas.size();
+        // swash::Image contents under Format::Subpixel (via zeno):
+        //   Content::Mask         — 1 byte/pixel (rare fallback).
+        //   Content::SubpixelMask — 4 bytes/pixel (RGBA layout; A undefined).
+        //                           R = coverage sampled at x − 0.3
+        //                           G = coverage sampled at x
+        //                           B = coverage sampled at x + 0.3
+        //                           zeno does NOT apply an LCD filter — raw
+        //                           subpixel masks have severe colour fringes
+        //                           unless filtered before display.
+        //   Content::Color        — 4 bytes/pixel (RGBA): color glyphs / emoji.
+        //
+        // We store filtered RGB coverage in atlas RGB and max(RGB) in A so the
+        // shader can use A as a single-channel "opacity gate" for destination
+        // attenuation.
+        //
+        // Filter: FreeType's default "fir5" LCD filter — symmetric 5-tap
+        // [1, 2, 3, 2, 1] / 9 across the conceptual 3·w-wide subpixel row.
+        // This is the same kernel Microsoft ClearType / Pango / Skia use as
+        // their default. Without it, vertical stems on dark-mode terminals
+        // explode into pure-channel rainbow noise.
+        use swash::scale::image::Content;
         for row in 0..h {
+            let row_base = (row * w * 4) as usize;
+            // Read the s-th subpixel in this row (s ∈ [0, 3w)). Indices
+            // outside the placement bounds clamp to zero — this matches what
+            // FreeType does for glyph border padding.
+            let read_subpx = |s: i32| -> u32 {
+                if s < 0 || s >= (w as i32) * 3 {
+                    return 0;
+                }
+                let pixel = (s as usize) / 3;
+                let channel = (s as usize) % 3;
+                image.data[row_base + pixel * 4 + channel] as u32
+            };
             for col in 0..w {
-                let src_i = (row * w + col) as usize;
                 let dst_x = region.px_min[0] + col;
                 let dst_y = region.px_min[1] + row;
                 let dst_i = ((dst_y * atlas_w + dst_x) * 4) as usize;
-                let a = image.data[src_i];
-                self.atlas_pixels[dst_i] = 255;
-                self.atlas_pixels[dst_i + 1] = 255;
-                self.atlas_pixels[dst_i + 2] = 255;
-                self.atlas_pixels[dst_i + 3] = a;
+                match image.content {
+                    Content::Mask => {
+                        // Single-channel grayscale — replicate across RGB so
+                        // the shader sees uniform per-channel coverage (no
+                        // colour fringes for fallback glyphs).
+                        let src_i = (row * w + col) as usize;
+                        let a = image.data[src_i];
+                        self.atlas_pixels[dst_i] = a;
+                        self.atlas_pixels[dst_i + 1] = a;
+                        self.atlas_pixels[dst_i + 2] = a;
+                        self.atlas_pixels[dst_i + 3] = a;
+                    }
+                    Content::SubpixelMask => {
+                        let sp_r = (col as i32) * 3;
+                        // Convolve [1,2,3,2,1] / 9 around each subpixel.
+                        let filt = |s: i32| -> u8 {
+                            let v = read_subpx(s - 2)
+                                + 2 * read_subpx(s - 1)
+                                + 3 * read_subpx(s)
+                                + 2 * read_subpx(s + 1)
+                                + read_subpx(s + 2);
+                            ((v + 4) / 9).min(255) as u8
+                        };
+                        let r = filt(sp_r);
+                        let g = filt(sp_r + 1);
+                        let b = filt(sp_r + 2);
+                        self.atlas_pixels[dst_i] = r;
+                        self.atlas_pixels[dst_i + 1] = g;
+                        self.atlas_pixels[dst_i + 2] = b;
+                        self.atlas_pixels[dst_i + 3] = r.max(g).max(b);
+                    }
+                    Content::Color => {
+                        let src_i = (row * w * 4 + col * 4) as usize;
+                        self.atlas_pixels[dst_i] = image.data[src_i];
+                        self.atlas_pixels[dst_i + 1] = image.data[src_i + 1];
+                        self.atlas_pixels[dst_i + 2] = image.data[src_i + 2];
+                        self.atlas_pixels[dst_i + 3] = image.data[src_i + 3];
+                    }
+                }
             }
         }
         self.atlas_dirty = true;
 
         let m = GlyphMetrics {
-            advance: self.font.glyph_metrics(&[]).scale(px_size).advance_width(glyph_id),
+            advance: font
+                .glyph_metrics(&[])
+                .scale(px_size)
+                .advance_width(glyph_id),
             bearing: [image.placement.left as f32, image.placement.top as f32],
             size_px: [w, h],
             region,
