@@ -290,15 +290,21 @@ fn row_to_pomodoro(row: &rusqlite::Row<'_>) -> rusqlite::Result<PomodoroState> {
 // the per-workspace timer; `workspace_id` is stored as `Uuid::nil()` since
 // the global timer isn't tied to any one workspace.
 
-/// Read the single global pomodoro row.
+/// Read the single global pomodoro row. The migration seeds it on first
+/// boot, but if the row were ever missing (manual SQL, partial restore)
+/// synthesise an idle state rather than erroring — the next upsert will
+/// re-insert it.
 pub fn get_app_pomodoro(conn: &Connection) -> Result<PomodoroState> {
-    let s = conn.query_row(
-        "SELECT mode, started_at, paused_at, target_seconds, \
-                elapsed_seconds_before_pause, cycles_completed, updated_at \
-         FROM app_pomodoro WHERE id = 1",
-        [],
-        row_to_app_pomodoro,
-    )?;
+    let s = conn
+        .query_row(
+            "SELECT mode, started_at, paused_at, target_seconds, \
+                    elapsed_seconds_before_pause, cycles_completed, updated_at \
+             FROM app_pomodoro WHERE id = 1",
+            [],
+            row_to_app_pomodoro,
+        )
+        .optional()?
+        .unwrap_or_else(|| PomodoroState::idle(uuid::Uuid::nil()));
     Ok(s)
 }
 

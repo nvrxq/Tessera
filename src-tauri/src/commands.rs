@@ -750,18 +750,21 @@ pub fn workspace_pomodoro_start(
     let prior = tessera_store::extras::get_pomodoro(&conn, workspace_id)
         .map_err(|e| e.to_string())?
         .unwrap_or_else(|| PomodoroState::idle(workspace_id));
+    let now = Utc::now();
+    // Credit any in-flight cycle being clobbered (same threshold as reset).
+    let cycles_completed = prior.cycles_completed + pomodoro_reset_cycle_credit(&prior, now);
     let state = PomodoroState {
         workspace_id,
         mode: new_mode,
-        started_at: Some(Utc::now()),
+        started_at: Some(now),
         paused_at: None,
         target_seconds: target_seconds.unwrap_or(match new_mode {
             PomodoroMode::Break => 300,
             _ => 1500,
         }),
         elapsed_seconds_before_pause: 0,
-        cycles_completed: prior.cycles_completed,
-        updated_at: Utc::now(),
+        cycles_completed,
+        updated_at: now,
     };
     tessera_store::extras::upsert_pomodoro(&conn, &state).map_err(|e| e.to_string())?;
     Ok(PomodoroStateDto::from(state))
@@ -955,18 +958,23 @@ pub fn app_pomodoro_start(
     };
     let conn = db.lock().unwrap();
     let prior = tessera_store::extras::get_app_pomodoro(&conn).map_err(|e| e.to_string())?;
+    let now = Utc::now();
+    // Credit any in-flight cycle being clobbered. Same threshold as reset
+    // (≥ target/2 of work or paused work) — otherwise switching from a
+    // nearly-complete Work to a Break would silently lose the cycle.
+    let cycles_completed = prior.cycles_completed + pomodoro_reset_cycle_credit(&prior, now);
     let state = PomodoroState {
         workspace_id: Uuid::nil(),
         mode: new_mode,
-        started_at: Some(Utc::now()),
+        started_at: Some(now),
         paused_at: None,
         target_seconds: target_seconds.unwrap_or(match new_mode {
             PomodoroMode::Break => 300,
             _ => 1500,
         }),
         elapsed_seconds_before_pause: 0,
-        cycles_completed: prior.cycles_completed,
-        updated_at: Utc::now(),
+        cycles_completed,
+        updated_at: now,
     };
     tessera_store::extras::upsert_app_pomodoro(&conn, &state).map_err(|e| e.to_string())?;
     Ok(AppPomodoroStateDto::from(state))
@@ -1183,5 +1191,26 @@ mod extras_tests {
         assert!(matches!(after.mode, PomodoroMode::Idle));
         assert_eq!(after.cycles_completed, 5);
         assert_eq!(after.elapsed_seconds_before_pause, 0);
+    }
+
+    /// Regression: starting a new mode while a Work session is past half
+    /// the target must credit the in-flight cycle, not silently drop it.
+    /// Mirrors the reset-from-running semantics applied via the same helper.
+    #[test]
+    fn start_credits_cycle_when_already_running_past_half() {
+        let now = Utc::now();
+        let started = now - chrono::Duration::seconds(20 * 60); // 20 of 25 min
+        let p = pomodoro(PomodoroMode::Work, Some(started), 0);
+        assert_eq!(pomodoro_reset_cycle_credit(&p, now), 1);
+    }
+
+    /// Counterpart: a Work session under half target gets no credit when
+    /// clobbered by start — the user effectively bailed early.
+    #[test]
+    fn start_no_cycle_when_already_running_under_half() {
+        let now = Utc::now();
+        let started = now - chrono::Duration::seconds(5 * 60); // 5 of 25 min
+        let p = pomodoro(PomodoroMode::Work, Some(started), 0);
+        assert_eq!(pomodoro_reset_cycle_credit(&p, now), 0);
     }
 }
