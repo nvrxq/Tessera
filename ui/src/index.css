@@ -367,7 +367,7 @@ body {
 .layout {
   flex: 1;
   display: grid;
-  grid-template-columns: 260px 1fr;
+  grid-template-columns: 300px 1fr;
   min-height: 0;
   position: relative;
   z-index: 1;
@@ -493,23 +493,30 @@ body {
   font-weight: 500;
   color: var(--text-primary);
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
   letter-spacing: -0.005em;
   line-height: 1.43;
   min-width: 0;
 }
-/* Single-line truncation. Earlier `overflow-wrap: anywhere` produced
- * per-character wrapping for long single-token names (e.g. Cyrillic
- * "Инкримент" stacked one letter per row when the project chip + ⚡
- * badge ate the row width). Full name still available on hover via
- * the `title` attribute the row sets. */
+/* Up-to-2-line wrap for the name itself. Cyrillic single-token names
+ * stretch wide; with line-clamp we get a graceful 2nd line if the first
+ * doesn't fit, plus ellipsis past line 2 as a hard floor. The icons
+ * (status dot, claude mark, project dot) align to the first line. */
 .workspace-name-text {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+/* Keep the dangerous-badge tucked to the first-line baseline even when
+ * the name wraps. */
+.workspace-name > .dangerous-badge {
+  margin-top: 2px;
 }
 .dangerous-badge {
   flex-shrink: 0;
@@ -526,8 +533,26 @@ body {
  * stack. Lowercase mono, terracotta-tinted by default; if the project
  * carries its own accent (set inline on the element), that overrides
  * both background and text colour. */
-.workspace-project-chip {
+/* 8px coloured dot indicating project membership. Replaces the wordy
+ * chip ("comrade", "rl") which ate horizontal space and forced long
+ * Cyrillic names to truncate aggressively. Project name still surfaced
+ * via the row tooltip and the `⋯` menu's current selection. */
+.workspace-project-dot {
   flex-shrink: 0;
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.workspace-project-chip {
+  /* Allow the chip to shrink (and ellipsise its own text) so the name
+   * keeps its min-width: 6ch floor. Floor the chip at 3ch — wide enough
+   * to read "rl" / "we" / etc but not the full word; tooltip carries
+   * the full project name. */
+  flex: 0 1 auto;
+  min-width: 3ch;
   align-self: center;
   margin-top: 1px;
   display: inline-block;
@@ -558,13 +583,23 @@ body {
   color: var(--accent-hover);
   opacity: 1;
 }
+/* Single-row meta line: READY · comrade · /path/to/workspace…
+ * Status label keeps its full text; project chip keeps its full text
+ * (shrunk to ellipsis only when truly cramped); path absorbs whatever
+ * room is left and trails off with ellipsis. */
 .workspace-substack {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 8px;
   min-width: 0;
 }
+.workspace-substack > .status-label {
+  flex-shrink: 0;
+}
 .workspace-branch {
+  flex: 1 1 auto;
+  min-width: 0;
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--text-muted);

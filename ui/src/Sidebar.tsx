@@ -51,12 +51,16 @@ const ClaudeMark: Component = () => (
   </span>
 );
 
-function subline(ws: WorkspaceDto): string {
+/** Differentiating subline: only worth showing when Claude has spawned
+ *  a git worktree (then the line tells you the branch + path). Falling
+ *  back to `repo_path` was redundant — most users keep all workspaces
+ *  in the same folder and the path was identical for every row. */
+function subline(ws: WorkspaceDto): string | null {
   if (ws.detected_worktree) {
     const branch = ws.detected_branch ? ` · ${ws.detected_branch}` : "";
     return `→ ${ws.detected_worktree}${branch}`;
   }
-  return ws.repo_path;
+  return null;
 }
 
 function sectionOf(ws: WorkspaceDto): SectionKey {
@@ -184,6 +188,11 @@ const Sidebar: Component<SidebarProps> = (props) => {
           "workspace-item--dragging": ws.id === dragId(),
           "workspace-item--drop-target": ws.id === overId() && ws.id !== dragId(),
         }}
+        title={
+          project
+            ? `${ws.name} · ${project.name}`
+            : ws.name
+        }
         draggable={true}
         onClick={() => props.onSelect(ws.id)}
         onDragStart={(e) => handleDragStart(e, ws)}
@@ -196,25 +205,16 @@ const Sidebar: Component<SidebarProps> = (props) => {
         <div class="workspace-meta">
           <div class="workspace-name">
             <ClaudeMark />
-            <span class="workspace-name-text" title={ws.name}>{ws.name}</span>
             <Show when={project}>
               {(p) => (
                 <span
-                  class="workspace-project-chip"
+                  class="workspace-project-dot"
                   title={`Project: ${p().name}`}
-                  style={
-                    p().accent
-                      ? {
-                          "background-color": `${p().accent}2E`,
-                          color: p().accent ?? undefined,
-                        }
-                      : undefined
-                  }
-                >
-                  {p().name.toLowerCase()}
-                </span>
+                  style={p().accent ? { "background-color": p().accent } : undefined}
+                />
               )}
             </Show>
+            <span class="workspace-name-text" title={ws.name}>{ws.name}</span>
             <Show when={ws.dangerous_skip_permissions}>
               <span class="dangerous-badge" title="--dangerously-skip-permissions">⚡</span>
             </Show>
@@ -223,7 +223,9 @@ const Sidebar: Component<SidebarProps> = (props) => {
             <span class={statusLabelClass(ws.agent_status)}>
               {statusLabel(ws.agent_status)}
             </span>
-            <span class="workspace-branch">{subline(ws)}</span>
+            <Show when={subline(ws)}>
+              {(line) => <span class="workspace-branch">{line()}</span>}
+            </Show>
           </div>
         </div>
         <div class="workspace-menu-wrap">
