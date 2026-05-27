@@ -108,9 +108,19 @@ case "$OS" in
     # it with the quarantine xattr. Since we're not Apple-notarised, strip
     # it ourselves; the user already opted in by running this script.
     xattr -dr com.apple.quarantine "$DEST" 2>/dev/null || true
+    # Re-sign ad-hoc so TCC has a deterministic signature to key off — at
+    # least permission grants survive across reinstalls of the same release.
+    # Real "permissions persist across updates" requires Apple Developer ID
+    # signing + notarisation, which we don't have.
+    codesign --force --deep --sign - --options runtime "$DEST" 2>/dev/null || true
     echo
     bold "==> done"
     echo "Launch: open '$DEST'"
+    echo "Note: macOS will still prompt for permissions on first access to"
+    echo "      protected folders (Documents/Downloads/Music/Pictures) and"
+    echo "      to read clipboard images — that's a one-time cost per"
+    echo "      category. Without an Apple Developer ID we can't make"
+    echo "      grants survive across binary updates."
     ;;
 
   Linux)

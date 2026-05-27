@@ -43,6 +43,17 @@ bold "==> building release binary (cargo)"
 cargo build --release --bin tessera --features custom-protocol
 
 BIN="$ROOT/target/release/tessera"
+
+# Ad-hoc codesign on macOS so TCC's signature-based identity is stable
+# across no-op rebuilds. Without ANY signature (or with -dev's default
+# linker-supplied weak one) macOS re-prompts for Photos/Documents/etc
+# every launch. Real fix is Apple Developer ID + notarization; this is
+# the cheap stopgap.
+if [ "$(uname -s)" = "Darwin" ]; then
+  bold "==> ad-hoc codesigning"
+  codesign --force --sign - --options runtime "$BIN" 2>&1 | sed 's/^/    /' || true
+fi
+
 SIZE="$(du -h "$BIN" | cut -f1)"
 
 echo
