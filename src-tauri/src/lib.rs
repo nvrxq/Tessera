@@ -254,6 +254,7 @@ pub fn run() {
             commands::settings_load,
             commands::settings_save,
             commands::settings_config_path,
+            commands::claude_inventory,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -439,6 +439,46 @@ pub fn settings_config_path() -> String {
     config_path().to_string_lossy().into_owned()
 }
 
+// ---- Claude inventory (skills + MCP servers) ----
+
+/// Surface what Claude Code will see when launched in a given workspace —
+/// the inventory of skills (global, plugin-shipped, project-local) and
+/// configured MCP servers. `workspace_id = None` returns globals only
+/// (header-level "all workspaces" view).
+///
+/// MCP `env` VALUES are deliberately never returned (only the keys). The
+/// `ClaudeInventory` types have no field for them and the parser doesn't
+/// extract them — a regression test in `tessera-core` guards against
+/// future code adding the field by accident.
+#[tauri::command]
+pub fn claude_inventory(
+    state: State<'_, WorkspaceServiceState>,
+    workspace_id: Option<Uuid>,
+) -> Result<tessera_core::ClaudeInventory, String> {
+    let ws_dir = match workspace_id {
+        None => None,
+        Some(id) => {
+            let ws = state.get(id).map_err(|e| e.to_string())?;
+            ws.map(|w| {
+                // Prefer the detected worktree (`git worktree add` target) if
+                // Claude has already created one — that's the folder Claude
+                // is actually working in. Otherwise fall back to the
+                // configured worktree_path; finally the repo path.
+                w.detected_worktree
+                    .filter(|p| p.is_dir())
+                    .unwrap_or_else(|| {
+                        if w.worktree_path.is_dir() {
+                            w.worktree_path
+                        } else {
+                            w.repo_path
+                        }
+                    })
+            })
+        }
+    };
+    Ok(tessera_core::ClaudeInventory::collect(ws_dir.as_deref()))
+}
+
 /// Persist a pasted image (PNG bytes, base64-encoded) to disk and return
 /// the absolute path. Frontend pastes flow: clipboard → readImage → encode
 /// PNG via canvas.toDataURL → this command → write returned path into the
