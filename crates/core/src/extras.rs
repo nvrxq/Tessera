@@ -6,6 +6,8 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
+use std::str::FromStr;
 use uuid::Uuid;
 
 /// What kind of URL `WorkspaceLink::url` points at. `Url` is the default; the
@@ -28,13 +30,20 @@ impl LinkKind {
             LinkKind::GithubPr => "github_pr",
         }
     }
+}
 
-    pub fn from_str(s: &str) -> Self {
-        match s {
+impl FromStr for LinkKind {
+    type Err = Infallible;
+
+    /// Total parse — any unknown string maps to `LinkKind::Url`. The store
+    /// only ever writes the three canonical strings, so the catch-all is
+    /// just defensive against hand-edited rows.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
             "github_issue" => LinkKind::GithubIssue,
             "github_pr" => LinkKind::GithubPr,
             _ => LinkKind::Url,
-        }
+        })
     }
 }
 
@@ -89,14 +98,19 @@ impl PomodoroMode {
             PomodoroMode::Paused => "paused",
         }
     }
+}
 
-    pub fn from_str(s: &str) -> Self {
-        match s {
+impl FromStr for PomodoroMode {
+    type Err = Infallible;
+
+    /// Total parse — unknown strings map to `PomodoroMode::Idle`.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
             "work" => PomodoroMode::Work,
             "break" => PomodoroMode::Break,
             "paused" => PomodoroMode::Paused,
             _ => PomodoroMode::Idle,
-        }
+        })
     }
 }
 

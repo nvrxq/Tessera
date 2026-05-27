@@ -6,6 +6,7 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
+use std::str::FromStr;
 use tessera_core::{LinkKind, PomodoroMode, PomodoroState, WorkspaceLink, WorkspaceTask};
 use uuid::Uuid;
 
@@ -52,8 +53,7 @@ pub fn delete_link(conn: &Connection, id: Uuid) -> Result<()> {
 pub fn update_link_sort_orders(conn: &Connection, updates: &[(Uuid, i64)]) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
     {
-        let mut stmt =
-            tx.prepare("UPDATE workspace_links SET sort_order = ?1 WHERE id = ?2")?;
+        let mut stmt = tx.prepare("UPDATE workspace_links SET sort_order = ?1 WHERE id = ?2")?;
         for (id, order) in updates {
             stmt.execute(params![order, id.to_string()])?;
         }
@@ -85,7 +85,7 @@ fn row_to_link(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkspaceLink> {
         workspace_id: parse_uuid(&ws_s, 1)?,
         label: row.get(2)?,
         url: row.get(3)?,
-        kind: LinkKind::from_str(&kind_s),
+        kind: LinkKind::from_str(&kind_s).unwrap_or(LinkKind::Url),
         created_at: parse_dt(&created_s, 5)?,
         sort_order: row.get(6)?,
     })
@@ -143,8 +143,7 @@ pub fn get_task(conn: &Connection, id: Uuid) -> Result<Option<WorkspaceTask>> {
 
 /// Toggle a task's `done` flag. Sets/clears `completed_at` accordingly.
 pub fn toggle_task(conn: &Connection, id: Uuid) -> Result<bool> {
-    let current = get_task(conn, id)?
-        .ok_or_else(|| anyhow::anyhow!("task {id} not found"))?;
+    let current = get_task(conn, id)?.ok_or_else(|| anyhow::anyhow!("task {id} not found"))?;
     let new_done = !current.done;
     let completed_at = if new_done {
         Some(Utc::now().to_rfc3339())
@@ -170,8 +169,7 @@ pub fn delete_task(conn: &Connection, id: Uuid) -> Result<()> {
 pub fn update_task_sort_orders(conn: &Connection, updates: &[(Uuid, i64)]) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
     {
-        let mut stmt =
-            tx.prepare("UPDATE workspace_tasks SET sort_order = ?1 WHERE id = ?2")?;
+        let mut stmt = tx.prepare("UPDATE workspace_tasks SET sort_order = ?1 WHERE id = ?2")?;
         for (id, order) in updates {
             stmt.execute(params![order, id.to_string()])?;
         }
@@ -268,7 +266,7 @@ fn row_to_pomodoro(row: &rusqlite::Row<'_>) -> rusqlite::Result<PomodoroState> {
     let updated_s: String = row.get(7)?;
     Ok(PomodoroState {
         workspace_id: parse_uuid(&ws_s, 0)?,
-        mode: PomodoroMode::from_str(&mode_s),
+        mode: PomodoroMode::from_str(&mode_s).unwrap_or(PomodoroMode::Idle),
         started_at: match started_s {
             Some(s) => Some(parse_dt(&s, 2)?),
             None => None,
