@@ -1,4 +1,5 @@
 import {
+  batch,
   createEffect,
   createSignal,
   getOwner,
@@ -6,6 +7,7 @@ import {
   onMount,
   runWithOwner,
   Show,
+  untrack,
 } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -106,6 +108,12 @@ const loadAlwaysShowCursor = (): boolean => {
 export default function Terminal(props: TerminalProps) {
   let host!: HTMLDivElement;
   let canvas!: HTMLCanvasElement;
+  // Dedicated overlay canvas for the selection highlight. Lives above
+  // the text canvas (z-index 1, pointer-events: none) so drag-selection
+  // only touches a translucent layer instead of forcing a full repaint
+  // of glyphs+decorations every frame. Sized in tandem with `canvas`.
+  let selCanvas!: HTMLCanvasElement;
+  let selCtx2d: CanvasRenderingContext2D | null = null;
   let unlisten: UnlistenFn | null = null;
   let activeSessionId: string | null = props.sessionId;
 
@@ -128,6 +136,8 @@ export default function Terminal(props: TerminalProps) {
     selStart = null;
     selEnd = null;
     selDragging = false;
+    dragRect = null;
+    clearSelectionOverlay();
   };
 
   // Local grid mirror — flat row-major Array(cols*rows). Updated on every
@@ -143,11 +153,19 @@ export default function Terminal(props: TerminalProps) {
 
   /** Cached 2D context — `canvas.getContext('2d')` is cheap (browsers
    *  cache it) but still a per-call property lookup; we hit it
-   *  per delta cell and per cursor-erase, so we keep one reference. */
+   *  per delta cell and per cursor-erase, so we keep one reference.
+   *  `alpha: false` lets the browser skip per-pixel alpha compositing
+   *  on the text layer — our default background (`#0F0F10`) is fully
+   *  opaque so transparency is wasted. The overlay canvas keeps the
+   *  default `alpha: true` because the selection rect IS translucent. */
   let ctx2d: CanvasRenderingContext2D | null = null;
   const ctx2dOf = (): CanvasRenderingContext2D | null => {
-    if (!ctx2d) ctx2d = canvas.getContext("2d");
+    if (!ctx2d) ctx2d = canvas.getContext("2d", { alpha: false });
     return ctx2d;
+  };
+  const selCtx2dOf = (): CanvasRenderingContext2D | null => {
+    if (!selCtx2d) selCtx2d = selCanvas.getContext("2d");
+    return selCtx2d;
   };
 
   // Snapshot values from the settings store. Live updates re-run the
@@ -207,6 +225,13 @@ export default function Terminal(props: TerminalProps) {
   let selDragging = false;
   // Rate-limit selection-driven repaints to one per frame.
   let selRepaintQueued = false;
+  // Cached canvas rect for the duration of a drag. `getBoundingClientRect`
+  // is a forced-layout read; on a 120Hz trackpad selection drag it can fire
+  // hundreds of times per second. The canvas size only changes via the
+  // ResizeObserver path, so we snapshot the rect on `pointerdown` and
+  // invalidate on pointerup / resize / session switch. `null` means "go
+  // ask the DOM" (used for non-drag callers like hover/click).
+  let dragRect: DOMRect | null = null;
 
   function selectionRange(): { a: CellPos; b: CellPos } | null {
     if (!selStart || !selEnd) return null;
@@ -247,7 +272,10 @@ export default function Terminal(props: TerminalProps) {
     if (cellW === 0 || cellH === 0 || gridCols === 0 || gridRows === 0) {
       return null;
     }
-    const rect = canvas.getBoundingClientRect();
+    // Use the rect cached at `pointerdown` while a drag is in flight to
+    // avoid forced layout on every pointermove; fall back to a live read
+    // for one-shot callers outside an active drag.
+    const rect = dragRect ?? canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
     const cssW = cellW / dpr;
     const cssH = cellH / dpr;
@@ -259,46 +287,42 @@ export default function Terminal(props: TerminalProps) {
     };
   }
 
-  /** Translucent blue overlay over the selected cells. Painted last so it
-   *  sits on top of glyphs and cursor; low alpha keeps text readable.
-   *  Clamps to current grid dims so a stale selection after a shrink
-   *  doesn't paint outside the canvas. */
-  function paintSelectionOverlay(ctx: CanvasRenderingContext2D) {
-    const r = selectionRange();
-    if (!r || gridCols === 0 || gridRows === 0) return;
-    ctx.save();
-    try {
-      ctx.fillStyle = "rgba(110, 160, 220, 0.32)";
-      const startRow = Math.max(0, Math.min(gridRows - 1, r.a.row));
-      const endRow = Math.max(0, Math.min(gridRows - 1, r.b.row));
-      if (endRow < startRow) return;
-      for (let row = startRow; row <= endRow; row++) {
-        let startCol = row === r.a.row ? r.a.col : 0;
-        let endCol = row === r.b.row ? r.b.col : gridCols - 1;
-        startCol = Math.max(0, Math.min(gridCols - 1, startCol));
-        endCol = Math.max(0, Math.min(gridCols - 1, endCol));
-        if (endCol < startCol) continue;
-        const x = startCol * cellW;
-        const y = row * cellH;
-        const w = (endCol - startCol + 1) * cellW;
-        ctx.fillRect(x, y, w, cellH);
-      }
-    } finally {
-      ctx.restore();
-    }
+  /** Wipe the overlay bitmap. Cheap — one `clearRect` over the whole layer
+   *  and the compositor takes care of the rest. Used on session switch,
+   *  on pointer-up when the drag produced no selection, and before each
+   *  selection repaint to erase the previous frame's highlight. */
+  function clearSelectionOverlay() {
+    const ctx = selCtx2dOf();
+    if (!ctx || !selCanvas) return;
+    ctx.clearRect(0, 0, selCanvas.width, selCanvas.height);
   }
 
-  /** Full repaint from the local grid mirror + cursor + selection. Used by
-   *  pointermove during a drag — cheap (≤ ~12000 cells at 60Hz). */
-  function repaintFromGrid() {
-    const ctx = ctx2dOf();
-    if (!ctx || gridCols === 0) return;
-    const px = fontPx * (window.devicePixelRatio || 1);
-    paintFull(px);
-    if (lastCursorVisible) {
-      paintCursor(ctx, lastCursorCol, lastCursorRow, lastCursorShape, px);
+  /** Translucent blue overlay over the selected cells. Paints onto the
+   *  dedicated overlay canvas (NOT the text canvas) so a drag-selection
+   *  doesn't force `paintFull` to re-render every glyph each frame.
+   *  Clamps to current grid dims so a stale selection after a shrink
+   *  doesn't paint outside the canvas. */
+  function paintSelectionOverlay() {
+    const ctx = selCtx2dOf();
+    if (!ctx) return;
+    ctx.clearRect(0, 0, selCanvas.width, selCanvas.height);
+    const r = selectionRange();
+    if (!r || gridCols === 0 || gridRows === 0) return;
+    ctx.fillStyle = "rgba(110, 160, 220, 0.32)";
+    const startRow = Math.max(0, Math.min(gridRows - 1, r.a.row));
+    const endRow = Math.max(0, Math.min(gridRows - 1, r.b.row));
+    if (endRow < startRow) return;
+    for (let row = startRow; row <= endRow; row++) {
+      let startCol = row === r.a.row ? r.a.col : 0;
+      let endCol = row === r.b.row ? r.b.col : gridCols - 1;
+      startCol = Math.max(0, Math.min(gridCols - 1, startCol));
+      endCol = Math.max(0, Math.min(gridCols - 1, endCol));
+      if (endCol < startCol) continue;
+      const x = startCol * cellW;
+      const y = row * cellH;
+      const w = (endCol - startCol + 1) * cellW;
+      ctx.fillRect(x, y, w, cellH);
     }
-    paintSelectionOverlay(ctx);
   }
 
   function scheduleSelectionRepaint() {
@@ -306,7 +330,7 @@ export default function Terminal(props: TerminalProps) {
     selRepaintQueued = true;
     requestAnimationFrame(() => {
       selRepaintQueued = false;
-      repaintFromGrid();
+      paintSelectionOverlay();
     });
   }
 
@@ -315,7 +339,7 @@ export default function Terminal(props: TerminalProps) {
     selStart = null;
     selEnd = null;
     selDragging = false;
-    repaintFromGrid();
+    clearSelectionOverlay();
   }
 
   /** Three-stage load state for the loading overlay:
@@ -385,6 +409,27 @@ export default function Terminal(props: TerminalProps) {
     }
     canvas.style.width = `${r.width}px`;
     canvas.style.height = `${r.height}px`;
+    // Keep the selection overlay in lockstep with the text canvas: same
+    // backing store size, same CSS size, same orientation. Resizing
+    // clears the overlay bitmap implicitly (canvas.width = ... semantics).
+    if (selCanvas) {
+      const selDimsChanged =
+        selCanvas.width !== newW || selCanvas.height !== newH;
+      if (selDimsChanged) {
+        selCanvas.width = newW;
+        selCanvas.height = newH;
+      }
+      selCanvas.style.width = `${r.width}px`;
+      selCanvas.style.height = `${r.height}px`;
+      // After a resize the cached drag-rect is stale and the overlay
+      // bitmap is blank — re-stamp the current selection (if any) so
+      // it survives a window-edge drag.
+      if (selDimsChanged) {
+        paintSelectionOverlay();
+      }
+    }
+    // Layout changed → cached pointerdown rect is stale.
+    dragRect = null;
     // If we DID resize, the canvas is now blank. Repaint immediately
     // from the local grid mirror so there's no black-flash window
     // between the resize and the next `term_snapshot` arrival.
@@ -519,7 +564,27 @@ export default function Terminal(props: TerminalProps) {
 
     // Pass 2: glyphs batched per (fg + font) run.
     const thickness = Math.max(1, Math.round(px * 0.06));
-    const decoFills: Array<[number, number, number, number, string]> = [];
+    // Decoration fills bucketed by color string. Building the map while
+    // we iterate cells lets us emit one `fillStyle = c; fillRect+` block
+    // per color at the end — no per-paint sort, no localeCompare cost.
+    const decoBuckets = new Map<
+      string,
+      Array<[number, number, number, number]>
+    >();
+    const pushDeco = (
+      col: string,
+      x: number,
+      y: number,
+      w: number,
+      h: number,
+    ) => {
+      let bucket = decoBuckets.get(col);
+      if (!bucket) {
+        bucket = [];
+        decoBuckets.set(col, bucket);
+      }
+      bucket.push([x, y, w, h]);
+    };
     let prevFont = "";
     let prevFill = "";
     for (let r = 0; r < gridRows; r++) {
@@ -570,50 +635,47 @@ export default function Terminal(props: TerminalProps) {
           }
         }
         if (cell.a & 4) {
-          decoFills.push([
+          pushDeco(
+            hexColor(cell.f),
             c * cellW,
             (r + 1) * cellH - thickness,
             cellW,
             thickness,
-            hexColor(cell.f),
-          ]);
+          );
         } else if (cell.a & 8) {
-          decoFills.push([
-            c * cellW,
-            (r + 1) * cellH - thickness * 3,
-            cellW,
-            thickness,
-            hexColor(cell.f),
-          ]);
-          decoFills.push([
-            c * cellW,
-            (r + 1) * cellH - thickness,
-            cellW,
-            thickness,
-            hexColor(cell.f),
-          ]);
+          const col = hexColor(cell.f);
+          pushDeco(col, c * cellW, (r + 1) * cellH - thickness * 3, cellW, thickness);
+          pushDeco(col, c * cellW, (r + 1) * cellH - thickness, cellW, thickness);
         }
         if (cell.a & 16) {
-          decoFills.push([
+          pushDeco(
+            hexColor(cell.f),
             c * cellW,
             r * cellH + Math.round(cellH / 2),
             cellW,
             thickness,
-            hexColor(cell.f),
-          ]);
+          );
         }
       }
       flushRun();
     }
-    decoFills.sort((a, b) => a[4].localeCompare(b[4]));
-    for (const [x, y, w, h, col] of decoFills) {
+    // Bucket decorations by color → one fillStyle assignment per color
+    // instead of an O(n log n) sort over every decorated cell. The
+    // visual output is identical: decorations only overlap inside a
+    // single cell (underline + strikethrough on the same glyph share
+    // `cell.f`, so they're already in one bucket and emit in the order
+    // they were collected).
+    for (const [col, rects] of decoBuckets) {
       if (col !== prevFill) {
         ctx.fillStyle = col;
         prevFill = col;
       }
-      ctx.fillRect(x, y, w, h);
+      for (let i = 0; i < rects.length; i++) {
+        const r = rects[i];
+        ctx.fillRect(r[0], r[1], r[2], r[3]);
+      }
     }
-    paintSelectionOverlay(ctx);
+    // Selection lives on its own canvas now — see `paintSelectionOverlay`.
   }
 
   function applySnapshot(snap: Snapshot) {
@@ -633,8 +695,15 @@ export default function Terminal(props: TerminalProps) {
       gridRows = snap.rows;
       grid = snap.cells.slice();
       // grid may be shorter than cols*rows on first paint — pad blanks.
-      while (grid.length < gridCols * gridRows) {
-        grid.push({ c: " ", f: hexToInt(settings().terminal.foreground), b: bgInt, a: 0 });
+      // `untrack` keeps the settings read defensive against any future
+      // wrapper that runs `applySnapshot` inside a tracked scope; today
+      // the call site is a rAF callback (already untracked), tomorrow
+      // it might not be.
+      if (grid.length < gridCols * gridRows) {
+        const fgInt = untrack(() => hexToInt(settings().terminal.foreground));
+        while (grid.length < gridCols * gridRows) {
+          grid.push({ c: " ", f: fgInt, b: bgInt, a: 0 });
+        }
       }
       paintFull(px);
     } else {
@@ -715,16 +784,17 @@ export default function Terminal(props: TerminalProps) {
       lastCursorRow = -1;
     }
 
-    // A delta path may have overpainted cells that the user has selected;
-    // re-stamp the translucent overlay on top so the highlight survives.
-    // (paintFull above already includes selection internally.)
-    if (!snap.full && (snap.positions?.length ?? 0) > 0) {
-      paintSelectionOverlay(ctx);
-    }
+    // Selection lives on its own canvas now — no need to re-stamp on
+    // every delta. The overlay only repaints when the selection itself
+    // changes (pointer drag) or on resize.
 
     // First snapshot for this workspace landed — fade out the loading
-    // overlay. Subsequent snapshots are no-ops here.
-    if (phase() !== "ready") setPhase("ready");
+    // overlay. Subsequent snapshots are no-ops here. Wrapped in `batch`
+    // + `untrack` so the read is non-subscribing and any future signal
+    // writes added next to it coalesce into one tick.
+    batch(() => {
+      if (untrack(phase) !== "ready") setPhase("ready");
+    });
   }
 
   async function syncGrid() {
@@ -834,8 +904,27 @@ export default function Terminal(props: TerminalProps) {
     void (async () => {
       await listenerReady;
 
+      // ResizeObserver fires on every sub-pixel layout shift (scrollbar
+      // appearance, focus rings, animation frames). Coalesce N ticks
+      // into one `syncGrid` per frame and skip the call entirely when
+      // the integer pixel size hasn't changed.
+      let roRaf: number | null = null;
+      let lastRoW = -1;
+      let lastRoH = -1;
       const ro = new ResizeObserver(() => {
-        void syncGrid();
+        // Cached drag rect is stale the moment layout shifts.
+        dragRect = null;
+        if (roRaf !== null) return;
+        roRaf = requestAnimationFrame(() => {
+          roRaf = null;
+          const rect = host.getBoundingClientRect();
+          const w = Math.round(rect.width);
+          const h = Math.round(rect.height);
+          if (w === lastRoW && h === lastRoH) return;
+          lastRoW = w;
+          lastRoH = h;
+          void syncGrid();
+        });
       });
       ro.observe(host);
 
@@ -971,11 +1060,23 @@ export default function Terminal(props: TerminalProps) {
       // Re-attach all post-await cleanups to the original component
       // owner — without this, every `onCleanup` here would silently
       // no-op because the owner ref is gone after the first `await`.
+      // Attach wheel listener imperatively so we can pass an explicit
+      // listener-options dict. (SolidJS JSX `onWheel` doesn't surface
+      // `passive` / `capture`.) We keep `passive: false` because the
+      // handler calls `preventDefault` to stop the host element from
+      // page-scrolling — switching to `passive: true` would crash the
+      // wheel-driven scrollback path entirely.
+      host.addEventListener("wheel", onWheel, { passive: false });
+
       runWithOwner(owner, () => {
-        onCleanup(() => ro.disconnect());
+        onCleanup(() => {
+          ro.disconnect();
+          if (roRaf !== null) cancelAnimationFrame(roRaf);
+        });
         onCleanup(() => stopCursorBlink());
         onCleanup(() => dropUnlisten());
         onCleanup(() => document.removeEventListener("keydown", onKey));
+        onCleanup(() => host.removeEventListener("wheel", onWheel));
       });
 
       host.focus();
@@ -1106,19 +1207,19 @@ export default function Terminal(props: TerminalProps) {
   // Trackpad on macOS emits many small-delta events per gesture; we
   // accumulate pixel deltas and flush whole-line increments. Browsers
   // sometimes report `deltaMode` in lines or pages, so normalise first.
+  //
+  // IPC coalescing: a trackpad gesture fires wheel at ~120Hz. Without
+  // batching, every crossed line emitted its own `invoke("terminal_scroll")`
+  // round-trip. We now accumulate `pendingScrollLines` across events and
+  // fire one `invoke` per rAF with the summed delta.
   const LINE_PIXELS = 20;
   let wheelAccum = 0;
-  const onWheel = (ev: WheelEvent) => {
-    const sid = activeSessionId;
-    if (!sid) return;
-    ev.preventDefault();
-    let delta = ev.deltaY;
-    if (ev.deltaMode === 1) delta *= LINE_PIXELS;       // lines
-    else if (ev.deltaMode === 2) delta *= LINE_PIXELS * 10; // pages
-    wheelAccum += delta;
-    const lines = Math.trunc(wheelAccum / LINE_PIXELS);
+  let pendingScrollLines = 0;
+  let scrollRafQueued = false;
+  const flushScrollPending = (sid: string) => {
+    const lines = pendingScrollLines;
+    pendingScrollLines = 0;
     if (lines === 0) return;
-    wheelAccum -= lines * LINE_PIXELS;
     // deltaY > 0 means content scrolls UP (= view moves DOWN) — i.e. we
     // want to move toward the live tail, which is `delta_back < 0`.
     // Conventional wheel-up gives deltaY < 0 → `delta_back > 0` (further
@@ -1128,12 +1229,44 @@ export default function Terminal(props: TerminalProps) {
       deltaBack: -lines,
     }).catch((e) => console.warn("terminal_scroll failed", e));
   };
+  const onWheel = (ev: WheelEvent) => {
+    const sid = activeSessionId;
+    if (!sid) return;
+    // Page would otherwise scroll the host element — keep this passive:false.
+    ev.preventDefault();
+    let delta = ev.deltaY;
+    if (ev.deltaMode === 1) delta *= LINE_PIXELS;       // lines
+    else if (ev.deltaMode === 2) delta *= LINE_PIXELS * 10; // pages
+    wheelAccum += delta;
+    const lines = Math.trunc(wheelAccum / LINE_PIXELS);
+    if (lines === 0) return;
+    wheelAccum -= lines * LINE_PIXELS;
+    pendingScrollLines += lines;
+    if (scrollRafQueued) return;
+    scrollRafQueued = true;
+    requestAnimationFrame(() => {
+      scrollRafQueued = false;
+      const stillActive = activeSessionId;
+      if (!stillActive) {
+        pendingScrollLines = 0;
+        return;
+      }
+      flushScrollPending(stillActive);
+    });
+  };
 
   // ── Pointer-driven text selection ──
   const onPointerDown = (ev: PointerEvent) => {
     if (ev.button !== 0) return; // left button only
+    // Cache the canvas rect for the lifetime of this drag — `cellAtClient`
+    // is called on every pointermove and a per-call `getBoundingClientRect`
+    // would force layout at 120Hz on a trackpad.
+    dragRect = canvas.getBoundingClientRect();
     const cell = cellAtClient(ev.clientX, ev.clientY);
-    if (!cell) return;
+    if (!cell) {
+      dragRect = null;
+      return;
+    }
     selStart = cell;
     selEnd = cell;
     selDragging = true;
@@ -1156,6 +1289,7 @@ export default function Terminal(props: TerminalProps) {
   const onPointerUp = (ev: PointerEvent) => {
     if (!selDragging) return;
     selDragging = false;
+    dragRect = null;
     try {
       canvas.releasePointerCapture(ev.pointerId);
     } catch {
@@ -1163,10 +1297,11 @@ export default function Terminal(props: TerminalProps) {
     }
     const range = selectionRange();
     if (selectionEmpty(range)) {
-      // Plain click without drag — clear the selection entirely.
+      // Plain click without drag — clear the selection entirely and
+      // wipe the overlay bitmap synchronously (no need for a rAF).
       selStart = null;
       selEnd = null;
-      scheduleSelectionRepaint();
+      clearSelectionOverlay();
     }
   };
 
@@ -1178,7 +1313,17 @@ export default function Terminal(props: TerminalProps) {
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
-        onWheel={onWheel}
+      />
+      <canvas
+        ref={selCanvas}
+        id="term-selection-overlay"
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          inset: "0",
+          "z-index": 1,
+          "pointer-events": "none",
+        }}
       />
       <div
         class="terminal-loading"
