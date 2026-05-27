@@ -2242,3 +2242,423 @@ button[type="submit"]:hover:not(:disabled) {
   border: 1px solid var(--border-subtle);
   background: var(--bg);
 }
+
+/* —— claude inventory modal ——
+ * Full-screen sheet that mirrors the settings modal language (surface-
+ * elevated, border-subtle, terracotta accent) but widens to 1100px to fit
+ * the skills/MCP card list. z-index 120 sits above the settings overlay
+ * (110) so opening inventory from inside settings still pops on top. */
+.inventory-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  animation: projects-modal-fade-in var(--t-short) var(--ease-out) both;
+}
+.inventory-modal {
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+  width: 100%;
+  max-width: 1100px;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: projects-modal-rise var(--t-medium) var(--ease-out) both;
+}
+.inventory-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border-subtle);
+  gap: 12px;
+}
+.inventory-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.inventory-title {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--text-primary);
+}
+.inventory-subtitle {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 540px;
+}
+.inventory-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.inventory-refresh {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: 50%;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    color var(--t-micro),
+    border-color var(--t-micro),
+    transform var(--t-short) var(--ease-spring);
+}
+.inventory-refresh:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+  transform: rotate(180deg);
+}
+.inventory-refresh:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.inventory-close {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 10px;
+  border-radius: 4px;
+  transition: color var(--t-micro), background var(--t-micro);
+}
+.inventory-close:hover {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
+.inventory-body {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+.inventory-nav {
+  border-right: 1px solid var(--border-subtle);
+  padding: 12px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--surface);
+  overflow-y: auto;
+}
+.inventory-nav-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background var(--t-micro), color var(--t-micro);
+}
+.inventory-nav-item:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+.inventory-nav-item--current {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.inventory-nav-count {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-subtle);
+  padding: 1px 6px;
+  border-radius: 9999px;
+  min-width: 22px;
+  text-align: center;
+}
+.inventory-nav-item--current .inventory-nav-count {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: transparent;
+}
+
+.inventory-pane {
+  overflow-y: auto;
+  padding: 18px 22px 24px;
+}
+.inventory-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.inventory-card {
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.inventory-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.inventory-card-name {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  letter-spacing: -0.005em;
+}
+.inventory-card-desc {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.inventory-card-cmd {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 6px 8px;
+  display: block;
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+.inventory-card-path {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 5px 8px;
+  display: block;
+  word-break: break-all;
+}
+.inventory-disclosure {
+  align-self: flex-start;
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color var(--t-micro);
+}
+.inventory-disclosure:hover {
+  color: var(--accent);
+}
+
+.inventory-chips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.inventory-chip {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-subtle);
+  padding: 2px 8px;
+  border-radius: 9999px;
+}
+.inventory-chip--env {
+  color: var(--text-primary);
+  border-color: var(--accent-quiet);
+}
+.inventory-env-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.inventory-env-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* Source pills — small, low-saturation backgrounds with full-opacity
+ * text. The terracotta accent is reserved for `plugin` so the user's eye
+ * gravitates to non-default surfaces; global gets a neutral pill and
+ * project gets the muted blue used elsewhere for "working" agents. */
+.inventory-source-pill {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.inventory-source-pill--global {
+  color: var(--text-secondary);
+  background: var(--surface-elevated);
+  border-color: var(--border-subtle);
+}
+.inventory-source-pill--plugin {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: rgba(200, 130, 91, 0.28);
+}
+.inventory-source-pill--project {
+  color: var(--working);
+  background: rgba(91, 141, 239, 0.10);
+  border-color: rgba(91, 141, 239, 0.28);
+}
+
+.inventory-kind {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-subtle);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.inventory-loading {
+  padding: 40px 0;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.inventory-empty {
+  padding: 48px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+.inventory-empty-mosaic {
+  display: grid;
+  grid-template-columns: repeat(4, 18px);
+  gap: 4px;
+  transform: rotate(-6deg);
+}
+.inventory-empty-mosaic span {
+  display: block;
+  width: 18px;
+  height: 18px;
+  background: var(--accent);
+  border-radius: 2px;
+  opacity: 0.08;
+}
+.inventory-empty-mosaic span:nth-child(2n) {
+  opacity: 0.05;
+}
+.inventory-empty-mosaic span:nth-child(3n) {
+  opacity: 0.10;
+}
+.inventory-empty-message {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+  max-width: 420px;
+}
+.inventory-error {
+  padding: 32px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  border: 1px solid var(--crashed);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--crashed) 8%, transparent);
+  margin: 16px;
+}
+.inventory-error-title {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.inventory-error-message {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+  word-break: break-word;
+}
+.inventory-error-retry {
+  margin-top: 8px;
+  padding: 6px 14px;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background var(--t-micro);
+}
+.inventory-error-retry:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+.inventory-error-retry:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

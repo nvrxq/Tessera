@@ -282,6 +282,83 @@ fn row_to_pomodoro(row: &rusqlite::Row<'_>) -> rusqlite::Result<PomodoroState> {
     })
 }
 
+// ---- global (app-wide) pomodoro ----
+//
+// Single-row table `app_pomodoro` (id = 1). The migration seeds an idle row,
+// so reads always succeed without a `get-or-insert` dance. We reuse
+// `PomodoroState` from `tessera_core` to keep the wire shape identical to
+// the per-workspace timer; `workspace_id` is stored as `Uuid::nil()` since
+// the global timer isn't tied to any one workspace.
+
+/// Read the single global pomodoro row. The migration seeds it on first
+/// boot, but if the row were ever missing (manual SQL, partial restore)
+/// synthesise an idle state rather than erroring — the next upsert will
+/// re-insert it.
+pub fn get_app_pomodoro(conn: &Connection) -> Result<PomodoroState> {
+    let s = conn
+        .query_row(
+            "SELECT mode, started_at, paused_at, target_seconds, \
+                    elapsed_seconds_before_pause, cycles_completed, updated_at \
+             FROM app_pomodoro WHERE id = 1",
+            [],
+            row_to_app_pomodoro,
+        )
+        .optional()?
+        .unwrap_or_else(|| PomodoroState::idle(uuid::Uuid::nil()));
+    Ok(s)
+}
+
+/// UPSERT the global pomodoro row. The row's primary key is fixed at 1.
+pub fn upsert_app_pomodoro(conn: &Connection, state: &PomodoroState) -> Result<()> {
+    conn.execute(
+        "INSERT INTO app_pomodoro \
+            (id, mode, started_at, paused_at, target_seconds, \
+             elapsed_seconds_before_pause, cycles_completed, updated_at) \
+         VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+         ON CONFLICT(id) DO UPDATE SET \
+            mode = excluded.mode, \
+            started_at = excluded.started_at, \
+            paused_at = excluded.paused_at, \
+            target_seconds = excluded.target_seconds, \
+            elapsed_seconds_before_pause = excluded.elapsed_seconds_before_pause, \
+            cycles_completed = excluded.cycles_completed, \
+            updated_at = excluded.updated_at",
+        params![
+            state.mode.as_str(),
+            state.started_at.map(|d| d.to_rfc3339()),
+            state.paused_at.map(|d| d.to_rfc3339()),
+            state.target_seconds,
+            state.elapsed_seconds_before_pause,
+            state.cycles_completed,
+            state.updated_at.to_rfc3339(),
+        ],
+    )?;
+    Ok(())
+}
+
+fn row_to_app_pomodoro(row: &rusqlite::Row<'_>) -> rusqlite::Result<PomodoroState> {
+    let mode_s: String = row.get(0)?;
+    let started_s: Option<String> = row.get(1)?;
+    let paused_s: Option<String> = row.get(2)?;
+    let updated_s: String = row.get(6)?;
+    Ok(PomodoroState {
+        workspace_id: Uuid::nil(),
+        mode: PomodoroMode::from_str(&mode_s).unwrap_or(PomodoroMode::Idle),
+        started_at: match started_s {
+            Some(s) => Some(parse_dt(&s, 1)?),
+            None => None,
+        },
+        paused_at: match paused_s {
+            Some(s) => Some(parse_dt(&s, 2)?),
+            None => None,
+        },
+        target_seconds: row.get(3)?,
+        elapsed_seconds_before_pause: row.get(4)?,
+        cycles_completed: row.get(5)?,
+        updated_at: parse_dt(&updated_s, 6)?,
+    })
+}
+
 // ---- helpers ----
 
 fn parse_uuid(s: &str, col: usize) -> rusqlite::Result<Uuid> {
@@ -486,7 +563,8 @@ mod tests {
     }
 
     /// End-to-end: ensures the 0006 migration runs cleanly on a DB at the
-    /// 0001..0005 state and exposes all three new tables.
+    /// 0001..0005 state and exposes all three new tables. The 0007 migration
+    /// adds the global `app_pomodoro` table on top.
     #[test]
     fn migration_creates_all_three_tables() {
         let conn = open_in_memory().unwrap();
@@ -500,5 +578,42 @@ mod tests {
         assert!(names.contains(&"workspace_links".to_string()));
         assert!(names.contains(&"workspace_tasks".to_string()));
         assert!(names.contains(&"workspace_pomodoro".to_string()));
+        assert!(names.contains(&"app_pomodoro".to_string()));
+    }
+
+    /// 0007 seeds an idle row so `get_app_pomodoro` always succeeds without
+    /// the caller needing a prior `upsert`. A subsequent update must
+    /// mutate-in-place (single-row enforced) rather than appending.
+    #[test]
+    fn app_pomodoro_round_trip_and_mutates_in_place() {
+        let conn = open_in_memory().unwrap();
+
+        let initial = get_app_pomodoro(&conn).unwrap();
+        assert!(matches!(initial.mode, PomodoroMode::Idle));
+        assert_eq!(initial.target_seconds, 1500);
+        assert_eq!(initial.cycles_completed, 0);
+
+        let mut s = initial.clone();
+        s.mode = PomodoroMode::Work;
+        s.started_at = Some(Utc::now());
+        s.target_seconds = 1500;
+        upsert_app_pomodoro(&conn, &s).unwrap();
+
+        let got = get_app_pomodoro(&conn).unwrap();
+        assert!(matches!(got.mode, PomodoroMode::Work));
+
+        s.mode = PomodoroMode::Paused;
+        s.elapsed_seconds_before_pause = 480;
+        s.paused_at = Some(Utc::now());
+        upsert_app_pomodoro(&conn, &s).unwrap();
+        let got = get_app_pomodoro(&conn).unwrap();
+        assert!(matches!(got.mode, PomodoroMode::Paused));
+        assert_eq!(got.elapsed_seconds_before_pause, 480);
+
+        // Single-row constraint: we still have exactly one row after multiple upserts.
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM app_pomodoro", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1);
     }
 }

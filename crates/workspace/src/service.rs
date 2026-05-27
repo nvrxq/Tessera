@@ -45,6 +45,14 @@ impl WorkspaceService {
         tessera_store::workspaces::list(&conn)
     }
 
+    /// Look up a single workspace by id. Used by the inventory command to
+    /// resolve the workspace's folder before scanning Claude's per-project
+    /// skill + MCP locations.
+    pub fn get(&self, workspace_id: Uuid) -> Result<Option<Workspace>> {
+        let conn = self.db.lock().unwrap();
+        tessera_store::workspaces::get(&conn, workspace_id)
+    }
+
     pub fn current_session(&self, workspace_id: Uuid) -> Option<Uuid> {
         self.sessions.lock().unwrap().get(&workspace_id).copied()
     }

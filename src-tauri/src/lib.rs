@@ -251,9 +251,15 @@ pub fn run() {
             commands::workspace_pomodoro_pause,
             commands::workspace_pomodoro_resume,
             commands::workspace_pomodoro_reset,
+            commands::app_pomodoro_get,
+            commands::app_pomodoro_start,
+            commands::app_pomodoro_pause,
+            commands::app_pomodoro_resume,
+            commands::app_pomodoro_reset,
             commands::settings_load,
             commands::settings_save,
             commands::settings_config_path,
+            commands::claude_inventory,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

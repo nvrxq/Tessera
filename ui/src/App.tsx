@@ -7,13 +7,14 @@ import {
   Show,
   type Component,
 } from "solid-js";
-import { ask, message } from "@tauri-apps/plugin-dialog";
+import { message } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { check as checkForAppUpdate } from "@tauri-apps/plugin-updater";
+import { check as checkForAppUpdate, type Update } from "@tauri-apps/plugin-updater";
 import Sidebar from "./Sidebar";
 import NewWorkspaceForm from "./NewWorkspaceForm";
 import ProjectsSettings from "./ProjectsSettings";
 import SettingsModal from "./SettingsModal";
+import ClaudeInventoryModal from "./ClaudeInventoryModal";
 import Terminal from "./Terminal";
 import WorkspaceExtrasPanel from "./WorkspaceExtrasPanel";
 import {
@@ -91,6 +92,7 @@ const App: Component = () => {
     });
   };
   const [showSettings, setShowSettings] = createSignal(false);
+  const [showInventory, setShowInventory] = createSignal(false);
   const clock = useClock();
   const [theme, setTheme] = createSignal<Theme>(initialTheme());
   applyTheme(theme());
@@ -121,31 +123,60 @@ const App: Component = () => {
     );
   });
 
-  // Background update check — fire-and-forget so a slow/missing endpoint
-  // never delays first paint. Plugin-updater verifies the minisign
-  // signature against the public key in tauri.conf.json before installing.
-  void (async () => {
+  // ── In-app updater ─────────────────────────────────────────────
+  // Replaces the previous "ask on startup" flow with a topbar pill that
+  // appears only when an update is detected. Click → install + relaunch.
+  // The signature is verified by plugin-updater against the embedded
+  // public key before downloadAndInstall actually swaps the binary, so
+  // we don't need a separate "are you sure" confirmation.
+  type UpdateState =
+    | { kind: "idle" }
+    | { kind: "available"; update: Update }
+    | { kind: "downloading"; update: Update; progress: number }
+    | { kind: "error"; message: string };
+  const [updateState, setUpdateState] = createSignal<UpdateState>({ kind: "idle" });
+
+  const runUpdateCheck = async () => {
     try {
       const update = await checkForAppUpdate();
-      if (!update?.available) return;
-      const ok = await ask(
-        `A new version of Tessera is available.\n\nCurrent: ${update.currentVersion}\nLatest:  ${update.version}\n\n${update.body ?? ""}`,
-        {
-          title: "Tessera update",
-          kind: "info",
-          okLabel: "Install & relaunch",
-          cancelLabel: "Later",
-        },
-      );
-      if (!ok) return;
-      await update.downloadAndInstall();
-      await relaunch();
+      if (update?.available) {
+        setUpdateState({ kind: "available", update });
+      }
     } catch (e) {
       // Dev / unsigned / network-down — quietly ignore so the app still
-      // boots. Real users get an alert only when an update exists.
+      // boots. The pill only surfaces when an update is actually offered.
       console.warn("update check failed", e);
     }
-  })();
+  };
+
+  // Check immediately on mount, then poll every 30 min — long-running
+  // sessions still discover new releases without forcing a relaunch.
+  void runUpdateCheck();
+  const updatePollId = window.setInterval(runUpdateCheck, 30 * 60 * 1000);
+  onCleanup(() => window.clearInterval(updatePollId));
+
+  const applyUpdate = async () => {
+    const st = updateState();
+    if (st.kind !== "available") return;
+    setUpdateState({ kind: "downloading", update: st.update, progress: 0 });
+    try {
+      let total = 0;
+      let received = 0;
+      await st.update.downloadAndInstall((evt) => {
+        if (evt.event === "Started") {
+          total = evt.data.contentLength ?? 0;
+        } else if (evt.event === "Progress") {
+          received += evt.data.chunkLength;
+          const pct = total > 0 ? Math.min(100, (received / total) * 100) : 0;
+          setUpdateState({ kind: "downloading", update: st.update, progress: pct });
+        }
+      });
+      // Install is complete on disk; relaunch swaps over to it.
+      await relaunch();
+    } catch (e) {
+      setUpdateState({ kind: "error", message: String(e) });
+    }
+  };
 
   onMount(async () => {
     // Pull the persisted settings into the live store before any
@@ -368,6 +399,51 @@ const App: Component = () => {
             <span class="topnav-item">Hooks.</span>
           </nav>
           <div class="topmeta">
+            <Show when={updateState().kind !== "idle"}>
+              {(() => {
+                const st = updateState();
+                if (st.kind === "available") {
+                  return (
+                    <button
+                      type="button"
+                      class="topmeta-update"
+                      onClick={applyUpdate}
+                      title={`Install Tessera v${st.update.version} and relaunch.${st.update.body ? "\n\n" + st.update.body : ""}`}
+                    >
+                      <span aria-hidden="true">↑</span> Update v{st.update.version}
+                    </button>
+                  );
+                }
+                if (st.kind === "downloading") {
+                  return (
+                    <button
+                      type="button"
+                      class="topmeta-update topmeta-update--busy"
+                      disabled
+                      title="Downloading update…"
+                    >
+                      Updating… {Math.round(st.progress)}%
+                    </button>
+                  );
+                }
+                if (st.kind === "error") {
+                  return (
+                    <button
+                      type="button"
+                      class="topmeta-update topmeta-update--error"
+                      onClick={() => {
+                        setUpdateState({ kind: "idle" });
+                        void runUpdateCheck();
+                      }}
+                      title={`Update failed: ${st.message}\nClick to retry.`}
+                    >
+                      ↻ Retry update
+                    </button>
+                  );
+                }
+                return null;
+              })()}
+            </Show>
             <span class="topmeta-clock">{clock()}</span>
             <button
               type="button"
@@ -383,6 +459,30 @@ const App: Component = () => {
                   stroke="currentColor"
                   stroke-width="1.4"
                   stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="topmeta-mode"
+              onClick={() => setShowInventory(true)}
+              title="Claude inventory (skills + MCP)"
+              aria-label="Open Claude inventory"
+            >
+              {/* Sparkles-on-a-page: a stand-in for "everything Claude
+                  will see on launch" — skills + MCP servers, the surfaces
+                  the agent reads at boot. */}
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true">
+                <path
+                  d="M6 3h9l4 4v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linejoin="round"
+                />
+                <path d="M15 3v4h4" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
+                <path
+                  d="M11.5 11l.7 1.7 1.8.4-1.4 1.2.4 1.8-1.5-1-1.5 1 .4-1.8L9 13.1l1.8-.4.7-1.7z"
+                  fill="currentColor"
                 />
               </svg>
             </button>
@@ -491,6 +591,13 @@ const App: Component = () => {
       </Show>
       <Show when={showSettings()}>
         <SettingsModal onClose={() => setShowSettings(false)} />
+      </Show>
+      <Show when={showInventory()}>
+        <ClaudeInventoryModal
+          workspaceId={selected()?.id ?? null}
+          workspaceLabel={selected()?.name ?? null}
+          onClose={() => setShowInventory(false)}
+        />
       </Show>
     </div>
   );
