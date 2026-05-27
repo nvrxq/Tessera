@@ -279,6 +279,61 @@ body {
   transform: rotate(20deg);
 }
 
+/* —— update pill ——
+ * Hidden until plugin-updater says a new version exists, then surfaces in
+ * the topbar with the version number. Distinct from .topmeta-mode (round
+ * icon button) so it reads as a call-to-action, not navigation. */
+.topmeta-update {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  height: 26px;
+  border-radius: 999px;
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition:
+    background var(--t-short),
+    color var(--t-short),
+    border-color var(--t-short),
+    transform var(--t-short) var(--ease-spring);
+  animation: topmeta-update-enter 320ms var(--ease-out, ease-out) both;
+}
+.topmeta-update:hover {
+  background: var(--accent);
+  color: white;
+  transform: translateY(-1px);
+}
+.topmeta-update--busy {
+  cursor: progress;
+  opacity: 0.85;
+  pointer-events: none;
+  animation: topmeta-update-pulse 1.2s ease-in-out infinite;
+}
+.topmeta-update--error {
+  border-color: var(--crashed, #c45353);
+  color: var(--crashed, #c45353);
+  background: transparent;
+}
+.topmeta-update--error:hover {
+  background: var(--crashed, #c45353);
+  color: white;
+}
+@keyframes topmeta-update-enter {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes topmeta-update-pulse {
+  0%, 100% { opacity: 0.85; }
+  50%      { opacity: 0.55; }
+}
+
 /* —— layout —— */
 .layout {
   flex: 1;
