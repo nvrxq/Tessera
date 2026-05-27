@@ -70,6 +70,24 @@ impl ColorPalette {
         }
     }
 
+    /// Build a palette from user-supplied overrides: default fg/bg + the
+    /// first 16 ANSI slots. Slots 16..=255 (the 6×6×6 cube and the
+    /// grayscale ramp) keep their `tessera_dark` values — those are
+    /// algorithmic and not worth exposing for editing.
+    ///
+    /// `ansi_16` must contain exactly 16 entries; anything else is
+    /// silently truncated/padded with the matching tessera_dark slot, so
+    /// a caller can pass a Vec built from user settings without crashing
+    /// on a malformed config.
+    pub fn from_user(default_fg: Color, default_bg: Color, ansi_16: &[Color]) -> Self {
+        let mut p = Self::tessera_dark();
+        p.default_fg = default_fg;
+        p.default_bg = default_bg;
+        let n = ansi_16.len().min(16);
+        p.table[..n].copy_from_slice(&ansi_16[..n]);
+        p
+    }
+
     /// Resolve a foreground `ColorAttribute` against this palette.
     pub fn resolve_fg(&self, attr: &ColorAttribute) -> Color {
         match attr {

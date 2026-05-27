@@ -9,7 +9,8 @@
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use tessera_term::{palette::ColorPalette, CursorShape, GridCell, Term};
+use tessera_core::{HexColor, UserConfig};
+use tessera_term::{palette::ColorPalette, Color, CursorShape, GridCell, Term};
 use uuid::Uuid;
 
 /// Compact wire form for one cell — sent inside `cells` whether the
@@ -56,7 +57,9 @@ struct SessionState {
 
 pub struct TerminalRegistry {
     inner: Mutex<HashMap<Uuid, SessionState>>,
-    palette: ColorPalette,
+    /// Wrapped so the settings layer can hot-swap the palette without
+    /// rebuilding the registry. Snapshots clone-by-ref through the mutex.
+    palette: Mutex<ColorPalette>,
 }
 
 impl Default for TerminalRegistry {
@@ -69,7 +72,19 @@ impl TerminalRegistry {
     pub fn new() -> Self {
         Self {
             inner: Mutex::new(HashMap::new()),
-            palette: ColorPalette::tessera_dark(),
+            palette: Mutex::new(ColorPalette::tessera_dark()),
+        }
+    }
+
+    /// Replace the active palette and force every live session to emit a
+    /// full snapshot on its next sample so the new colours actually paint.
+    /// Called from `settings_save` after the user changes the palette in
+    /// the Settings modal.
+    pub fn set_palette(&self, palette: ColorPalette) {
+        *self.palette.lock().unwrap_or_else(|e| e.into_inner()) = palette;
+        let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        for st in map.values_mut() {
+            st.last_cells.clear();
         }
     }
 
@@ -128,7 +143,8 @@ impl TerminalRegistry {
         let Some(st) = map.get_mut(&sid) else {
             return 0;
         };
-        let max = st.term.grid(&self.palette).scrollback_max();
+        let palette = self.palette.lock().unwrap_or_else(|e| e.into_inner());
+        let max = st.term.grid(&palette).scrollback_max();
         let want = (st.scroll_offset as i64) + delta_back as i64;
         let clamped = want.clamp(0, max as i64) as usize;
         if clamped != st.scroll_offset {
@@ -155,7 +171,8 @@ impl TerminalRegistry {
         let scroll_offset = st.scroll_offset;
         let mut current: Vec<WireCell> = Vec::with_capacity(total);
         {
-            let grid = st.term.grid(&self.palette);
+            let palette = self.palette.lock().unwrap_or_else(|e| e.into_inner());
+            let grid = st.term.grid(&palette);
             for row in grid.rows_iter_with_offset(scroll_offset) {
                 for cell in &row {
                     current.push(wire_cell(cell));
@@ -248,6 +265,25 @@ fn wire_cell(c: &GridCell) -> WireCell {
         a |= 16;
     }
     WireCell { c: c.ch, f, b, a }
+}
+
+/// Translate the user-facing settings into a `ColorPalette`. Invalid hex
+/// would have been rejected at `UserConfig` deserialise time, so every
+/// string here is known to be `#RRGGBB`.
+pub fn palette_from_config(cfg: &UserConfig) -> ColorPalette {
+    let bg = parse_hex(&cfg.terminal.background);
+    let fg = parse_hex(&cfg.terminal.foreground);
+    let ansi: Vec<Color> = cfg.terminal.palette.iter().map(parse_hex).collect();
+    ColorPalette::from_user(fg, bg, &ansi)
+}
+
+fn parse_hex(c: &HexColor) -> Color {
+    let s = c.as_str();
+    // safe: HexColor's deserializer guarantees `#RRGGBB`.
+    let r = u8::from_str_radix(&s[1..3], 16).unwrap_or(0);
+    let g = u8::from_str_radix(&s[3..5], 16).unwrap_or(0);
+    let b = u8::from_str_radix(&s[5..7], 16).unwrap_or(0);
+    Color::rgb(r, g, b)
 }
 
 struct DevNull;

@@ -43,6 +43,15 @@ pub fn run() {
     let registry: Arc<TerminalRegistry> = Arc::new(TerminalRegistry::new());
     let grid_sizes: GridSizes = Arc::new(Mutex::new(std::collections::HashMap::new()));
 
+    // Apply persisted user settings to the registry's live palette so the
+    // first snapshot already paints with the user's customised colours.
+    // (Settings might also be absent — that just leaves the tessera_dark
+    // default in place.)
+    {
+        let cfg = tessera_core::UserConfig::load_or_default(&tessera_core::config::config_path());
+        registry.set_palette(crate::terminal::palette_from_config(&cfg));
+    }
+
     let socket_path = data_dir.join("hooks.sock");
 
     tauri::Builder::default()
@@ -242,6 +251,9 @@ pub fn run() {
             commands::workspace_pomodoro_pause,
             commands::workspace_pomodoro_resume,
             commands::workspace_pomodoro_reset,
+            commands::settings_load,
+            commands::settings_save,
+            commands::settings_config_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
