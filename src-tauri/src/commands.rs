@@ -300,9 +300,7 @@ pub fn project_create(
 }
 
 #[tauri::command]
-pub fn project_list(
-    state: State<'_, WorkspaceServiceState>,
-) -> Result<Vec<ProjectDto>, String> {
+pub fn project_list(state: State<'_, WorkspaceServiceState>) -> Result<Vec<ProjectDto>, String> {
     state
         .list_projects()
         .map(|v| v.into_iter().map(ProjectDto::from).collect())
@@ -310,10 +308,7 @@ pub fn project_list(
 }
 
 #[tauri::command]
-pub fn project_delete(
-    state: State<'_, WorkspaceServiceState>,
-    id: Uuid,
-) -> Result<(), String> {
+pub fn project_delete(state: State<'_, WorkspaceServiceState>, id: Uuid) -> Result<(), String> {
     state.delete_project(id).map_err(|e| e.to_string())
 }
 
@@ -431,9 +426,7 @@ pub fn save_paste_image(data_b64: String) -> Result<String, String> {
 // `WorkspaceService`, so all writes are serialised through one lock — no
 // risk of interleaving with workspace CRUD.
 
-use tessera_core::{
-    LinkKind, PomodoroMode, PomodoroState, WorkspaceLink, WorkspaceTask,
-};
+use tessera_core::{LinkKind, PomodoroMode, PomodoroState, WorkspaceLink, WorkspaceTask};
 
 #[derive(Debug, Serialize)]
 pub struct WorkspaceLinkDto {
@@ -535,7 +528,10 @@ fn detect_github(url: &str) -> Option<(LinkKind, String)> {
     let number_seg = parts.next()?;
     // Number may carry a trailing slash/query/fragment — strip on first
     // non-digit so `/pull/123#issuecomment-...` still parses.
-    let number: String = number_seg.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let number: String = number_seg
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
     if number.is_empty() {
         return None;
     }
@@ -580,8 +576,8 @@ pub fn workspace_links_add(
         .or(derived_label);
 
     let conn = db.lock().unwrap();
-    let sort_order =
-        tessera_store::extras::next_link_sort_order(&conn, workspace_id).map_err(|e| e.to_string())?;
+    let sort_order = tessera_store::extras::next_link_sort_order(&conn, workspace_id)
+        .map_err(|e| e.to_string())?;
     let link = WorkspaceLink {
         id: Uuid::new_v4(),
         workspace_id,
@@ -602,10 +598,7 @@ pub fn workspace_links_delete(db: State<'_, DbState>, id: Uuid) -> Result<(), St
 }
 
 #[tauri::command]
-pub fn workspace_links_reorder(
-    db: State<'_, DbState>,
-    ids: Vec<Uuid>,
-) -> Result<(), String> {
+pub fn workspace_links_reorder(db: State<'_, DbState>, ids: Vec<Uuid>) -> Result<(), String> {
     // Gapped sort_order so a future single-row insert can slot in.
     let updates: Vec<(Uuid, i64)> = ids
         .into_iter()
@@ -640,8 +633,8 @@ pub fn workspace_tasks_add(
         return Err("title is required".to_string());
     }
     let conn = db.lock().unwrap();
-    let sort_order =
-        tessera_store::extras::next_task_sort_order(&conn, workspace_id).map_err(|e| e.to_string())?;
+    let sort_order = tessera_store::extras::next_task_sort_order(&conn, workspace_id)
+        .map_err(|e| e.to_string())?;
     let task = WorkspaceTask {
         id: Uuid::new_v4(),
         workspace_id,
@@ -669,10 +662,7 @@ pub fn workspace_tasks_delete(db: State<'_, DbState>, id: Uuid) -> Result<(), St
 }
 
 #[tauri::command]
-pub fn workspace_tasks_reorder(
-    db: State<'_, DbState>,
-    ids: Vec<Uuid>,
-) -> Result<(), String> {
+pub fn workspace_tasks_reorder(db: State<'_, DbState>, ids: Vec<Uuid>) -> Result<(), String> {
     let updates: Vec<(Uuid, i64)> = ids
         .into_iter()
         .enumerate()
@@ -707,7 +697,11 @@ pub fn workspace_pomodoro_start(
     let new_mode = match mode.as_str() {
         "work" => PomodoroMode::Work,
         "break" => PomodoroMode::Break,
-        other => return Err(format!("invalid mode {other:?}, expected 'work' or 'break'")),
+        other => {
+            return Err(format!(
+                "invalid mode {other:?}, expected 'work' or 'break'"
+            ))
+        }
     };
     let conn = db.lock().unwrap();
     let prior = tessera_store::extras::get_pomodoro(&conn, workspace_id)
@@ -718,7 +712,7 @@ pub fn workspace_pomodoro_start(
         mode: new_mode,
         started_at: Some(Utc::now()),
         paused_at: None,
-        target_seconds: target_seconds.unwrap_or_else(|| match new_mode {
+        target_seconds: target_seconds.unwrap_or(match new_mode {
             PomodoroMode::Break => 300,
             _ => 1500,
         }),
@@ -807,17 +801,7 @@ pub fn workspace_pomodoro_reset(
     let prior = tessera_store::extras::get_pomodoro(&conn, workspace_id)
         .map_err(|e| e.to_string())?
         .unwrap_or_else(|| PomodoroState::idle(workspace_id));
-    // Only credit a cycle when we were in a work session that ran at
-    // least half its target — keeps "accidental start → reset" from
-    // inflating the counter.
-    let mut cycles = prior.cycles_completed;
-    if matches!(prior.mode, PomodoroMode::Work) {
-        let elapsed = prior.started_at.map(|t| (Utc::now() - t).num_seconds().max(0)).unwrap_or(0);
-        let total = prior.elapsed_seconds_before_pause + elapsed;
-        if total >= prior.target_seconds / 2 {
-            cycles += 1;
-        }
-    }
+    let cycles = prior.cycles_completed + pomodoro_reset_cycle_credit(&prior, Utc::now());
     let state = PomodoroState {
         workspace_id,
         mode: PomodoroMode::Idle,
@@ -832,14 +816,45 @@ pub fn workspace_pomodoro_reset(
     Ok(PomodoroStateDto::from(state))
 }
 
+/// Returns `1` when a reset should credit a completed work cycle, `0`
+/// otherwise. Pure so it can be unit-tested without a DB.
+///
+/// Rules — credit when the prior mode is `Work` or `Paused` and the elapsed
+/// work time is at least half the target. The half-target threshold keeps
+/// "accidental start → reset" from inflating the counter while still
+/// rewarding a paused 23-of-25-min session.
+///
+/// Elapsed depends on mode:
+/// - `Work`:   `elapsed_seconds_before_pause + (now - started_at)`
+/// - `Paused`: `elapsed_seconds_before_pause` only — `started_at` was frozen
+///   at pause time, so adding `(now - started_at)` would count the entire
+///   paused interval as productive time.
+fn pomodoro_reset_cycle_credit(prior: &PomodoroState, now: DateTime<Utc>) -> i64 {
+    let total = match prior.mode {
+        PomodoroMode::Work => {
+            let live = prior
+                .started_at
+                .map(|t| (now - t).num_seconds().max(0))
+                .unwrap_or(0);
+            prior.elapsed_seconds_before_pause + live
+        }
+        PomodoroMode::Paused => prior.elapsed_seconds_before_pause,
+        _ => return 0,
+    };
+    if total >= prior.target_seconds / 2 {
+        1
+    } else {
+        0
+    }
+}
+
 #[cfg(test)]
 mod extras_tests {
     use super::*;
 
     #[test]
     fn detect_github_issue() {
-        let (kind, label) =
-            detect_github("https://github.com/nvrxq/Tessera/issues/42").unwrap();
+        let (kind, label) = detect_github("https://github.com/nvrxq/Tessera/issues/42").unwrap();
         assert!(matches!(kind, LinkKind::GithubIssue));
         assert_eq!(label, "nvrxq/Tessera#42");
     }
@@ -858,5 +873,79 @@ mod extras_tests {
         assert!(detect_github("https://github.com/nvrxq/Tessera").is_none());
         assert!(detect_github("https://github.com/nvrxq/Tessera/issues/abc").is_none());
         assert!(detect_github("not a url").is_none());
+    }
+
+    fn pomodoro(
+        mode: PomodoroMode,
+        started_at: Option<DateTime<Utc>>,
+        before: i64,
+    ) -> PomodoroState {
+        PomodoroState {
+            workspace_id: Uuid::nil(),
+            mode,
+            started_at,
+            paused_at: None,
+            target_seconds: 1500, // 25 min
+            elapsed_seconds_before_pause: before,
+            cycles_completed: 0,
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn cycle_credit_zero_when_idle_or_break() {
+        let now = Utc::now();
+        assert_eq!(
+            pomodoro_reset_cycle_credit(&pomodoro(PomodoroMode::Idle, None, 0), now),
+            0
+        );
+        assert_eq!(
+            pomodoro_reset_cycle_credit(&pomodoro(PomodoroMode::Break, Some(now), 0), now),
+            0,
+        );
+    }
+
+    #[test]
+    fn cycle_credit_zero_when_work_too_short() {
+        // 5 min in, target 25 — under half (≤ 12 min 30s).
+        let now = Utc::now();
+        let started = now - chrono::Duration::seconds(5 * 60);
+        let p = pomodoro(PomodoroMode::Work, Some(started), 0);
+        assert_eq!(pomodoro_reset_cycle_credit(&p, now), 0);
+    }
+
+    #[test]
+    fn cycle_credit_one_when_work_past_half_target() {
+        // 20 min in, target 25 — over half.
+        let now = Utc::now();
+        let started = now - chrono::Duration::seconds(20 * 60);
+        let p = pomodoro(PomodoroMode::Work, Some(started), 0);
+        assert_eq!(pomodoro_reset_cycle_credit(&p, now), 1);
+    }
+
+    /// Regression: a 23-of-25-min session that the user paused and *then*
+    /// reset should still credit one cycle. Earlier code only matched
+    /// `PomodoroMode::Work` and dropped the credit because pause flips the
+    /// mode to `Paused`.
+    #[test]
+    fn cycle_credit_one_when_paused_past_half_target() {
+        let now = Utc::now();
+        // started 30 min ago, paused 7 min later → 23 min credit, started_at frozen.
+        let started = now - chrono::Duration::seconds(30 * 60);
+        let p = pomodoro(PomodoroMode::Paused, Some(started), 23 * 60);
+        assert_eq!(pomodoro_reset_cycle_credit(&p, now), 1);
+    }
+
+    /// Regression: when paused, we must NOT add `(now - started_at)` to
+    /// `elapsed_seconds_before_pause` — that would credit the entire time
+    /// the user left the timer paused as productive work, and a brief 1-min
+    /// session paused for an hour would falsely credit a full cycle.
+    #[test]
+    fn cycle_credit_zero_when_paused_with_low_elapsed_long_pause() {
+        let now = Utc::now();
+        // started 2h ago, paused after 60 s → only 60 s of credit.
+        let started = now - chrono::Duration::hours(2);
+        let p = pomodoro(PomodoroMode::Paused, Some(started), 60);
+        assert_eq!(pomodoro_reset_cycle_credit(&p, now), 0);
     }
 }
