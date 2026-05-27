@@ -1,4 +1,12 @@
-import { createResource, createSignal, onCleanup, onMount, Show, type Component } from "solid-js";
+import {
+  createEffect,
+  createResource,
+  createSignal,
+  onCleanup,
+  onMount,
+  Show,
+  type Component,
+} from "solid-js";
 import { ask, message } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check as checkForAppUpdate } from "@tauri-apps/plugin-updater";
@@ -57,16 +65,19 @@ const App: Component = () => {
   const [selectedId, setSelectedId] = createSignal<string | null>(null);
   const [showNew, setShowNew] = createSignal(false);
   const [showProjects, setShowProjects] = createSignal(false);
-  // Right-side extras panel (Links / Tasks / Pomodoro). Persisted across the
-  // session lifetime via localStorage so reopening Tessera with the panel
-  // open doesn't force the user to re-toggle it.
-  const [showExtras, setShowExtras] = createSignal(
-    localStorage.getItem("tessera.extrasOpen") === "1",
-  );
+  // Right-side extras panel (Links / Tasks / Pomodoro). Each workspace
+  // remembers its own open/closed state under `tessera.extrasOpen:<ws id>`
+  // so toggling on workspace A doesn't pop the panel open on workspace B
+  // — different workspaces have different rhythms (background daemons vs
+  // active pomodoro tracking) and the panel's visibility should follow
+  // that. Brand-new workspaces default to closed.
+  const extrasKey = (id: string) => `tessera.extrasOpen:${id}`;
+  const [showExtras, setShowExtras] = createSignal(false);
   const toggleExtras = () => {
     setShowExtras((v) => {
       const next = !v;
-      localStorage.setItem("tessera.extrasOpen", next ? "1" : "0");
+      const id = selectedId();
+      if (id) localStorage.setItem(extrasKey(id), next ? "1" : "0");
       return next;
     });
   };
@@ -136,6 +147,17 @@ const App: Component = () => {
   });
 
   const selected = () => workspaces()?.find((w) => w.id === selectedId()) ?? null;
+
+  // When the user switches workspaces, restore that workspace's saved
+  // extras-panel state. Unknown/new ids default to closed.
+  createEffect(() => {
+    const id = selectedId();
+    if (!id) {
+      setShowExtras(false);
+      return;
+    }
+    setShowExtras(localStorage.getItem(extrasKey(id)) === "1");
+  });
 
   const onSelect = (id: string) => {
     setSelectedId(id);
@@ -361,7 +383,10 @@ const App: Component = () => {
                     workspaceId={selected()!.id}
                     onClose={() => {
                       setShowExtras(false);
-                      localStorage.setItem("tessera.extrasOpen", "0");
+                      localStorage.setItem(
+                        extrasKey(selected()!.id),
+                        "0",
+                      );
                     }}
                   />
                 </Show>
