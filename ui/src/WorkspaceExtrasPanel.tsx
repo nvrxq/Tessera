@@ -8,6 +8,7 @@ import {
   Show,
   type Component,
 } from "solid-js";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   formatMmSs,
   pomodoroRemainingSeconds,
@@ -189,12 +190,17 @@ const LinkRow: Component<{ link: WorkspaceLink; onDelete: (id: string) => void }
   const isGithub = () =>
     p.link.kind === "github_issue" || p.link.kind === "github_pr";
 
-  const openLink = (e: MouseEvent) => {
-    e.preventDefault();
-    // Tauri WebView opens external links via the OS default browser if we
-    // simply use window.open; we go through the standard anchor click but
-    // also expose a button to avoid the Tauri navigation guards.
-    window.open(p.link.url, "_blank");
+  const openLink = async (_e: MouseEvent) => {
+    // In Tauri 2 WebView, `window.open(url, "_blank")` silently no-ops
+    // unless the opener plugin is installed. We hand the URL to the
+    // plugin so it hits the OS default browser. We deliberately do NOT
+    // `preventDefault()` — if the invoke throws (plugin missing, perm
+    // denied), the anchor's native `href` still fires as a fallback.
+    try {
+      await openUrl(p.link.url);
+    } catch (err) {
+      console.error("openUrl failed", err);
+    }
   };
 
   return (
@@ -254,7 +260,10 @@ const TasksTab: Component<{ workspaceId: string }> = (props) => {
   };
 
   const onToggle = async (id: string) => {
-    // Optimistic flip; on failure refetch authoritative state.
+    // Optimistic flip; on failure refetch authoritative state. The
+    // backend returns the post-toggle `done` bool — trust it over the
+    // local flip in case the row was deleted/toggled between list and
+    // toggle (e.g. another window also has the panel open).
     const before = tasks() ?? [];
     mutate(
       before.map((t) =>
@@ -268,7 +277,18 @@ const TasksTab: Component<{ workspaceId: string }> = (props) => {
       ),
     );
     try {
-      await workspaceTasksToggle(id);
+      const serverDone = await workspaceTasksToggle(id);
+      mutate((list) =>
+        (list ?? []).map((t) =>
+          t.id === id
+            ? {
+                ...t,
+                done: serverDone,
+                completed_at: serverDone ? new Date().toISOString() : null,
+              }
+            : t,
+        ),
+      );
     } catch (err) {
       console.error("workspace_tasks_toggle failed", err);
       refetch();
@@ -386,12 +406,26 @@ const PomodoroTab: Component<{ workspaceId: string }> = (props) => {
     }
   };
 
+  // setInterval is paused while the OS sleeps or the window is hidden,
+  // but the server-side `started_at` keeps moving. Without re-anchoring
+  // after we come back, the countdown freezes at its pre-sleep value and
+  // drifts arbitrarily from reality. Re-fetch state from the backend on
+  // visibility/focus so the local clock snaps back to the server clock.
+  const onVis = () => {
+    if (document.visibilityState === "visible") void refresh();
+  };
+  const onFocus = () => void refresh();
+
   onMount(() => {
     void refresh();
     intervalId = window.setInterval(() => setNow(Date.now()), 1000);
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("focus", onFocus);
   });
   onCleanup(() => {
     if (intervalId != null) window.clearInterval(intervalId);
+    document.removeEventListener("visibilitychange", onVis);
+    window.removeEventListener("focus", onFocus);
   });
 
   // Refetch when the workspace id changes (panel mounts once per
