@@ -1064,6 +1064,10 @@ body {
   outline: none;
   position: relative;
   overflow: hidden;
+  /* Canvas glyphs are pre-rasterised by `ctx.fillText`; subpixel-aware
+   * text rendering on the wrapper costs us layout work we never use.
+   * Bias the browser toward speed over geometric precision. */
+  text-rendering: optimizeSpeed;
 }
 .overlay-anchor canvas {
   display: block;
