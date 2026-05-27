@@ -1,4 +1,12 @@
-import { createEffect, createResource, createSignal, onCleanup, onMount, Show, type Component } from "solid-js";
+import {
+  createEffect,
+  createResource,
+  createSignal,
+  onCleanup,
+  onMount,
+  Show,
+  type Component,
+} from "solid-js";
 import { ask, message } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check as checkForAppUpdate } from "@tauri-apps/plugin-updater";
@@ -7,6 +15,7 @@ import NewWorkspaceForm from "./NewWorkspaceForm";
 import ProjectsSettings from "./ProjectsSettings";
 import SettingsModal from "./SettingsModal";
 import Terminal from "./Terminal";
+import WorkspaceExtrasPanel from "./WorkspaceExtrasPanel";
 import {
   DEFAULT_CONFIG,
   loadSettings,
@@ -65,6 +74,22 @@ const App: Component = () => {
   const [selectedId, setSelectedId] = createSignal<string | null>(null);
   const [showNew, setShowNew] = createSignal(false);
   const [showProjects, setShowProjects] = createSignal(false);
+  // Right-side extras panel (Links / Tasks / Pomodoro). Each workspace
+  // remembers its own open/closed state under `tessera.extrasOpen:<ws id>`
+  // so toggling on workspace A doesn't pop the panel open on workspace B
+  // — different workspaces have different rhythms (background daemons vs
+  // active pomodoro tracking) and the panel's visibility should follow
+  // that. Brand-new workspaces default to closed.
+  const extrasKey = (id: string) => `tessera.extrasOpen:${id}`;
+  const [showExtras, setShowExtras] = createSignal(false);
+  const toggleExtras = () => {
+    setShowExtras((v) => {
+      const next = !v;
+      const id = selectedId();
+      if (id) localStorage.setItem(extrasKey(id), next ? "1" : "0");
+      return next;
+    });
+  };
   const [showSettings, setShowSettings] = createSignal(false);
   const clock = useClock();
   const [theme, setTheme] = createSignal<Theme>(initialTheme());
@@ -183,6 +208,17 @@ const App: Component = () => {
   });
 
   const selected = () => workspaces()?.find((w) => w.id === selectedId()) ?? null;
+
+  // When the user switches workspaces, restore that workspace's saved
+  // extras-panel state. Unknown/new ids default to closed.
+  createEffect(() => {
+    const id = selectedId();
+    if (!id) {
+      setShowExtras(false);
+      return;
+    }
+    setShowExtras(localStorage.getItem(extrasKey(id)) === "1");
+  });
 
   const onSelect = (id: string) => {
     setSelectedId(id);
@@ -399,11 +435,39 @@ const App: Component = () => {
               />
             </Show>
             <Show when={!showNew() && selected()?.id}>
-              <Terminal
-                workspaceId={selected()!.id}
-                sessionId={selected()?.session_id ?? null}
-                onSpawned={(sid) => onTerminalSpawned(selected()!.id, sid)}
-              />
+              <div class="workspace-shell">
+                <button
+                  type="button"
+                  class="workspace-extras-toggle"
+                  classList={{ "workspace-extras-toggle--active": showExtras() }}
+                  onClick={toggleExtras}
+                  title={showExtras() ? "Hide extras panel" : "Show extras panel"}
+                  aria-label="Toggle extras panel"
+                  aria-pressed={showExtras()}
+                >
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true">
+                    <rect x="3" y="4" width="13" height="16" rx="1.5" stroke="currentColor" stroke-width="1.6" />
+                    <rect x="17" y="4" width="4" height="16" rx="1" fill="currentColor" />
+                  </svg>
+                </button>
+                <Terminal
+                  workspaceId={selected()!.id}
+                  sessionId={selected()?.session_id ?? null}
+                  onSpawned={(sid) => onTerminalSpawned(selected()!.id, sid)}
+                />
+                <Show when={showExtras()}>
+                  <WorkspaceExtrasPanel
+                    workspaceId={selected()!.id}
+                    onClose={() => {
+                      setShowExtras(false);
+                      localStorage.setItem(
+                        extrasKey(selected()!.id),
+                        "0",
+                      );
+                    }}
+                  />
+                </Show>
+              </div>
             </Show>
             <Show when={!showNew() && !selected()}>
               <section class="hero">

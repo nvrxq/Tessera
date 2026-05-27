@@ -1,7 +1,7 @@
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tauri::{Emitter, State};
 use tessera_core::{config::config_path, UserConfig};
 use tessera_pty::session::SessionConfig;
@@ -9,6 +9,10 @@ use tessera_pty::Supervisor;
 use uuid::Uuid;
 
 pub type SupervisorState = Arc<Supervisor>;
+/// Shared SQLite handle used by the workspace-extras commands. Lives behind
+/// the same `Arc<Mutex<Connection>>` that `WorkspaceService` holds, so the
+/// extras commands and the existing workspace commands serialise on one lock.
+pub type DbState = Arc<Mutex<rusqlite::Connection>>;
 
 #[derive(Debug, Deserialize)]
 pub struct SpawnArgs {
@@ -297,9 +301,7 @@ pub fn project_create(
 }
 
 #[tauri::command]
-pub fn project_list(
-    state: State<'_, WorkspaceServiceState>,
-) -> Result<Vec<ProjectDto>, String> {
+pub fn project_list(state: State<'_, WorkspaceServiceState>) -> Result<Vec<ProjectDto>, String> {
     state
         .list_projects()
         .map(|v| v.into_iter().map(ProjectDto::from).collect())
@@ -307,10 +309,7 @@ pub fn project_list(
 }
 
 #[tauri::command]
-pub fn project_delete(
-    state: State<'_, WorkspaceServiceState>,
-    id: Uuid,
-) -> Result<(), String> {
+pub fn project_delete(state: State<'_, WorkspaceServiceState>, id: Uuid) -> Result<(), String> {
     state.delete_project(id).map_err(|e| e.to_string())
 }
 
@@ -340,7 +339,6 @@ pub fn workspace_assign_project(
 // ---- Terminal grid (Canvas2D backend) ----
 
 use std::collections::HashMap;
-use std::sync::Mutex;
 
 use crate::terminal::TerminalRegistry;
 
@@ -463,4 +461,534 @@ pub fn save_paste_image(data_b64: String) -> Result<String, String> {
     let path = dir.join(format!("{}.png", Uuid::new_v4()));
     std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
     Ok(path.to_string_lossy().to_string())
+}
+
+// ---- Workspace extras (links / tasks / pomodoro) ----
+//
+// These commands share the same `Arc<Mutex<Connection>>` as
+// `WorkspaceService`, so all writes are serialised through one lock — no
+// risk of interleaving with workspace CRUD.
+
+use tessera_core::{LinkKind, PomodoroMode, PomodoroState, WorkspaceLink, WorkspaceTask};
+
+#[derive(Debug, Serialize)]
+pub struct WorkspaceLinkDto {
+    pub id: Uuid,
+    pub workspace_id: Uuid,
+    pub label: Option<String>,
+    pub url: String,
+    pub kind: LinkKind,
+    pub created_at: DateTime<Utc>,
+    pub sort_order: i64,
+}
+
+impl From<WorkspaceLink> for WorkspaceLinkDto {
+    fn from(l: WorkspaceLink) -> Self {
+        Self {
+            id: l.id,
+            workspace_id: l.workspace_id,
+            label: l.label,
+            url: l.url,
+            kind: l.kind,
+            created_at: l.created_at,
+            sort_order: l.sort_order,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct WorkspaceTaskDto {
+    pub id: Uuid,
+    pub workspace_id: Uuid,
+    pub title: String,
+    pub done: bool,
+    pub sort_order: i64,
+    pub due_date: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+impl From<WorkspaceTask> for WorkspaceTaskDto {
+    fn from(t: WorkspaceTask) -> Self {
+        Self {
+            id: t.id,
+            workspace_id: t.workspace_id,
+            title: t.title,
+            done: t.done,
+            sort_order: t.sort_order,
+            due_date: t.due_date,
+            created_at: t.created_at,
+            completed_at: t.completed_at,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct PomodoroStateDto {
+    pub workspace_id: Uuid,
+    pub mode: PomodoroMode,
+    pub started_at: Option<DateTime<Utc>>,
+    pub paused_at: Option<DateTime<Utc>>,
+    pub target_seconds: i64,
+    pub elapsed_seconds_before_pause: i64,
+    pub cycles_completed: i64,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl From<PomodoroState> for PomodoroStateDto {
+    fn from(s: PomodoroState) -> Self {
+        Self {
+            workspace_id: s.workspace_id,
+            mode: s.mode,
+            started_at: s.started_at,
+            paused_at: s.paused_at,
+            target_seconds: s.target_seconds,
+            elapsed_seconds_before_pause: s.elapsed_seconds_before_pause,
+            cycles_completed: s.cycles_completed,
+            updated_at: s.updated_at,
+        }
+    }
+}
+
+/// Match `https://github.com/<owner>/<repo>/(issues|pull)/<n>`. We strip
+/// `http://` and `https://`, then walk segments by hand — keeps us inside
+/// the workspace's existing dependency set (no `regex` crate).
+///
+/// Returns `(kind, "owner/repo#N")` on a match, or `None` for any other URL.
+fn detect_github(url: &str) -> Option<(LinkKind, String)> {
+    let trimmed = url.trim();
+    let without_scheme = trimmed
+        .strip_prefix("https://")
+        .or_else(|| trimmed.strip_prefix("http://"))?;
+    let mut parts = without_scheme.split('/');
+    let host = parts.next()?;
+    if !host.eq_ignore_ascii_case("github.com") && !host.eq_ignore_ascii_case("www.github.com") {
+        return None;
+    }
+    let owner = parts.next().filter(|s| !s.is_empty())?;
+    let repo = parts.next().filter(|s| !s.is_empty())?;
+    let kind_seg = parts.next()?;
+    let number_seg = parts.next()?;
+    // Number may carry a trailing slash/query/fragment — strip on first
+    // non-digit so `/pull/123#issuecomment-...` still parses.
+    let number: String = number_seg
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    if number.is_empty() {
+        return None;
+    }
+    let kind = match kind_seg {
+        "issues" => LinkKind::GithubIssue,
+        "pull" => LinkKind::GithubPr,
+        _ => return None,
+    };
+    Some((kind, format!("{owner}/{repo}#{number}")))
+}
+
+#[tauri::command]
+pub fn workspace_links_list(
+    db: State<'_, DbState>,
+    workspace_id: Uuid,
+) -> Result<Vec<WorkspaceLinkDto>, String> {
+    let conn = db.lock().unwrap();
+    tessera_store::extras::list_links(&conn, workspace_id)
+        .map(|v| v.into_iter().map(WorkspaceLinkDto::from).collect())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn workspace_links_add(
+    db: State<'_, DbState>,
+    workspace_id: Uuid,
+    url: String,
+    label: Option<String>,
+) -> Result<WorkspaceLinkDto, String> {
+    let url = url.trim().to_string();
+    if url.is_empty() {
+        return Err("url is required".to_string());
+    }
+    let (kind, derived_label) = match detect_github(&url) {
+        Some((k, lbl)) => (k, Some(lbl)),
+        None => (LinkKind::Url, None),
+    };
+    // User-supplied label always wins; otherwise use the GitHub-derived one.
+    let final_label = label
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or(derived_label);
+
+    let conn = db.lock().unwrap();
+    let sort_order = tessera_store::extras::next_link_sort_order(&conn, workspace_id)
+        .map_err(|e| e.to_string())?;
+    let link = WorkspaceLink {
+        id: Uuid::new_v4(),
+        workspace_id,
+        label: final_label,
+        url,
+        kind,
+        created_at: Utc::now(),
+        sort_order,
+    };
+    tessera_store::extras::insert_link(&conn, &link).map_err(|e| e.to_string())?;
+    Ok(WorkspaceLinkDto::from(link))
+}
+
+#[tauri::command]
+pub fn workspace_links_delete(db: State<'_, DbState>, id: Uuid) -> Result<(), String> {
+    let conn = db.lock().unwrap();
+    tessera_store::extras::delete_link(&conn, id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn workspace_links_reorder(db: State<'_, DbState>, ids: Vec<Uuid>) -> Result<(), String> {
+    // Gapped sort_order so a future single-row insert can slot in.
+    let updates: Vec<(Uuid, i64)> = ids
+        .into_iter()
+        .enumerate()
+        .map(|(i, id)| (id, ((i + 1) as i64) * 10))
+        .collect();
+    let conn = db.lock().unwrap();
+    tessera_store::extras::update_link_sort_orders(&conn, &updates).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn workspace_tasks_list(
+    db: State<'_, DbState>,
+    workspace_id: Uuid,
+    include_completed: bool,
+) -> Result<Vec<WorkspaceTaskDto>, String> {
+    let conn = db.lock().unwrap();
+    tessera_store::extras::list_tasks(&conn, workspace_id, include_completed)
+        .map(|v| v.into_iter().map(WorkspaceTaskDto::from).collect())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn workspace_tasks_add(
+    db: State<'_, DbState>,
+    workspace_id: Uuid,
+    title: String,
+    due_date: Option<String>,
+) -> Result<WorkspaceTaskDto, String> {
+    let title = title.trim().to_string();
+    if title.is_empty() {
+        return Err("title is required".to_string());
+    }
+    let conn = db.lock().unwrap();
+    let sort_order = tessera_store::extras::next_task_sort_order(&conn, workspace_id)
+        .map_err(|e| e.to_string())?;
+    let task = WorkspaceTask {
+        id: Uuid::new_v4(),
+        workspace_id,
+        title,
+        done: false,
+        sort_order,
+        due_date,
+        created_at: Utc::now(),
+        completed_at: None,
+    };
+    tessera_store::extras::insert_task(&conn, &task).map_err(|e| e.to_string())?;
+    Ok(WorkspaceTaskDto::from(task))
+}
+
+#[tauri::command]
+pub fn workspace_tasks_toggle(db: State<'_, DbState>, id: Uuid) -> Result<bool, String> {
+    let conn = db.lock().unwrap();
+    tessera_store::extras::toggle_task(&conn, id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn workspace_tasks_delete(db: State<'_, DbState>, id: Uuid) -> Result<(), String> {
+    let conn = db.lock().unwrap();
+    tessera_store::extras::delete_task(&conn, id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn workspace_tasks_reorder(db: State<'_, DbState>, ids: Vec<Uuid>) -> Result<(), String> {
+    let updates: Vec<(Uuid, i64)> = ids
+        .into_iter()
+        .enumerate()
+        .map(|(i, id)| (id, ((i + 1) as i64) * 10))
+        .collect();
+    let conn = db.lock().unwrap();
+    tessera_store::extras::update_task_sort_orders(&conn, &updates).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn workspace_pomodoro_get(
+    db: State<'_, DbState>,
+    workspace_id: Uuid,
+) -> Result<PomodoroStateDto, String> {
+    let conn = db.lock().unwrap();
+    let state = tessera_store::extras::get_pomodoro(&conn, workspace_id)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_else(|| PomodoroState::idle(workspace_id));
+    Ok(PomodoroStateDto::from(state))
+}
+
+/// Begin a fresh work or break run. Discards any prior `paused`/`idle`
+/// elapsed time — the frontend's "Start" button is unambiguous (use
+/// `resume` for paused timers).
+#[tauri::command]
+pub fn workspace_pomodoro_start(
+    db: State<'_, DbState>,
+    workspace_id: Uuid,
+    mode: String,
+    target_seconds: Option<i64>,
+) -> Result<PomodoroStateDto, String> {
+    let new_mode = match mode.as_str() {
+        "work" => PomodoroMode::Work,
+        "break" => PomodoroMode::Break,
+        other => {
+            return Err(format!(
+                "invalid mode {other:?}, expected 'work' or 'break'"
+            ))
+        }
+    };
+    let conn = db.lock().unwrap();
+    let prior = tessera_store::extras::get_pomodoro(&conn, workspace_id)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_else(|| PomodoroState::idle(workspace_id));
+    let state = PomodoroState {
+        workspace_id,
+        mode: new_mode,
+        started_at: Some(Utc::now()),
+        paused_at: None,
+        target_seconds: target_seconds.unwrap_or(match new_mode {
+            PomodoroMode::Break => 300,
+            _ => 1500,
+        }),
+        elapsed_seconds_before_pause: 0,
+        cycles_completed: prior.cycles_completed,
+        updated_at: Utc::now(),
+    };
+    tessera_store::extras::upsert_pomodoro(&conn, &state).map_err(|e| e.to_string())?;
+    Ok(PomodoroStateDto::from(state))
+}
+
+/// Pause whatever is running. Captures elapsed time so `resume` continues
+/// from the same offset. No-op if the timer is already paused or idle.
+#[tauri::command]
+pub fn workspace_pomodoro_pause(
+    db: State<'_, DbState>,
+    workspace_id: Uuid,
+) -> Result<PomodoroStateDto, String> {
+    let conn = db.lock().unwrap();
+    let prior = tessera_store::extras::get_pomodoro(&conn, workspace_id)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_else(|| PomodoroState::idle(workspace_id));
+    if !matches!(prior.mode, PomodoroMode::Work | PomodoroMode::Break) {
+        return Ok(PomodoroStateDto::from(prior));
+    }
+    let elapsed_now = prior
+        .started_at
+        .map(|t| (Utc::now() - t).num_seconds().max(0))
+        .unwrap_or(0);
+    let state = PomodoroState {
+        workspace_id,
+        mode: PomodoroMode::Paused,
+        started_at: prior.started_at,
+        paused_at: Some(Utc::now()),
+        target_seconds: prior.target_seconds,
+        elapsed_seconds_before_pause: prior.elapsed_seconds_before_pause + elapsed_now,
+        cycles_completed: prior.cycles_completed,
+        updated_at: Utc::now(),
+    };
+    tessera_store::extras::upsert_pomodoro(&conn, &state).map_err(|e| e.to_string())?;
+    Ok(PomodoroStateDto::from(state))
+}
+
+/// Resume a paused timer back to its prior mode (work by default — pause
+/// only happens during work or break, and we don't try to remember which).
+/// `started_at` is shifted forward so the live countdown picks up exactly
+/// where it left off.
+#[tauri::command]
+pub fn workspace_pomodoro_resume(
+    db: State<'_, DbState>,
+    workspace_id: Uuid,
+) -> Result<PomodoroStateDto, String> {
+    let conn = db.lock().unwrap();
+    let prior = tessera_store::extras::get_pomodoro(&conn, workspace_id)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_else(|| PomodoroState::idle(workspace_id));
+    if !matches!(prior.mode, PomodoroMode::Paused) {
+        return Ok(PomodoroStateDto::from(prior));
+    }
+    // Re-anchor `started_at` so `elapsed = now - started_at` continues
+    // from `elapsed_seconds_before_pause`. The mode flips back to `work`
+    // — we don't track the pre-pause mode separately.
+    let new_started = Utc::now() - chrono::Duration::seconds(prior.elapsed_seconds_before_pause);
+    let state = PomodoroState {
+        workspace_id,
+        mode: PomodoroMode::Work,
+        started_at: Some(new_started),
+        paused_at: None,
+        target_seconds: prior.target_seconds,
+        elapsed_seconds_before_pause: 0,
+        cycles_completed: prior.cycles_completed,
+        updated_at: Utc::now(),
+    };
+    tessera_store::extras::upsert_pomodoro(&conn, &state).map_err(|e| e.to_string())?;
+    Ok(PomodoroStateDto::from(state))
+}
+
+/// Reset the timer to idle. Bumps `cycles_completed` if the timer ran
+/// long enough to count as a finished work cycle (≥ 50% of target).
+#[tauri::command]
+pub fn workspace_pomodoro_reset(
+    db: State<'_, DbState>,
+    workspace_id: Uuid,
+) -> Result<PomodoroStateDto, String> {
+    let conn = db.lock().unwrap();
+    let prior = tessera_store::extras::get_pomodoro(&conn, workspace_id)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_else(|| PomodoroState::idle(workspace_id));
+    let cycles = prior.cycles_completed + pomodoro_reset_cycle_credit(&prior, Utc::now());
+    let state = PomodoroState {
+        workspace_id,
+        mode: PomodoroMode::Idle,
+        started_at: None,
+        paused_at: None,
+        target_seconds: prior.target_seconds,
+        elapsed_seconds_before_pause: 0,
+        cycles_completed: cycles,
+        updated_at: Utc::now(),
+    };
+    tessera_store::extras::upsert_pomodoro(&conn, &state).map_err(|e| e.to_string())?;
+    Ok(PomodoroStateDto::from(state))
+}
+
+/// Returns `1` when a reset should credit a completed work cycle, `0`
+/// otherwise. Pure so it can be unit-tested without a DB.
+///
+/// Rules — credit when the prior mode is `Work` or `Paused` and the elapsed
+/// work time is at least half the target. The half-target threshold keeps
+/// "accidental start → reset" from inflating the counter while still
+/// rewarding a paused 23-of-25-min session.
+///
+/// Elapsed depends on mode:
+/// - `Work`:   `elapsed_seconds_before_pause + (now - started_at)`
+/// - `Paused`: `elapsed_seconds_before_pause` only — `started_at` was frozen
+///   at pause time, so adding `(now - started_at)` would count the entire
+///   paused interval as productive time.
+fn pomodoro_reset_cycle_credit(prior: &PomodoroState, now: DateTime<Utc>) -> i64 {
+    let total = match prior.mode {
+        PomodoroMode::Work => {
+            let live = prior
+                .started_at
+                .map(|t| (now - t).num_seconds().max(0))
+                .unwrap_or(0);
+            prior.elapsed_seconds_before_pause + live
+        }
+        PomodoroMode::Paused => prior.elapsed_seconds_before_pause,
+        _ => return 0,
+    };
+    if total >= prior.target_seconds / 2 {
+        1
+    } else {
+        0
+    }
+}
+
+#[cfg(test)]
+mod extras_tests {
+    use super::*;
+
+    #[test]
+    fn detect_github_issue() {
+        let (kind, label) = detect_github("https://github.com/nvrxq/Tessera/issues/42").unwrap();
+        assert!(matches!(kind, LinkKind::GithubIssue));
+        assert_eq!(label, "nvrxq/Tessera#42");
+    }
+
+    #[test]
+    fn detect_github_pr_with_fragment() {
+        let (kind, label) =
+            detect_github("https://github.com/nvrxq/Tessera/pull/7#issuecomment-1").unwrap();
+        assert!(matches!(kind, LinkKind::GithubPr));
+        assert_eq!(label, "nvrxq/Tessera#7");
+    }
+
+    #[test]
+    fn detect_github_rejects_non_github_or_garbage() {
+        assert!(detect_github("https://example.com/x/y/issues/1").is_none());
+        assert!(detect_github("https://github.com/nvrxq/Tessera").is_none());
+        assert!(detect_github("https://github.com/nvrxq/Tessera/issues/abc").is_none());
+        assert!(detect_github("not a url").is_none());
+    }
+
+    fn pomodoro(
+        mode: PomodoroMode,
+        started_at: Option<DateTime<Utc>>,
+        before: i64,
+    ) -> PomodoroState {
+        PomodoroState {
+            workspace_id: Uuid::nil(),
+            mode,
+            started_at,
+            paused_at: None,
+            target_seconds: 1500, // 25 min
+            elapsed_seconds_before_pause: before,
+            cycles_completed: 0,
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn cycle_credit_zero_when_idle_or_break() {
+        let now = Utc::now();
+        assert_eq!(
+            pomodoro_reset_cycle_credit(&pomodoro(PomodoroMode::Idle, None, 0), now),
+            0
+        );
+        assert_eq!(
+            pomodoro_reset_cycle_credit(&pomodoro(PomodoroMode::Break, Some(now), 0), now),
+            0,
+        );
+    }
+
+    #[test]
+    fn cycle_credit_zero_when_work_too_short() {
+        // 5 min in, target 25 — under half (≤ 12 min 30s).
+        let now = Utc::now();
+        let started = now - chrono::Duration::seconds(5 * 60);
+        let p = pomodoro(PomodoroMode::Work, Some(started), 0);
+        assert_eq!(pomodoro_reset_cycle_credit(&p, now), 0);
+    }
+
+    #[test]
+    fn cycle_credit_one_when_work_past_half_target() {
+        // 20 min in, target 25 — over half.
+        let now = Utc::now();
+        let started = now - chrono::Duration::seconds(20 * 60);
+        let p = pomodoro(PomodoroMode::Work, Some(started), 0);
+        assert_eq!(pomodoro_reset_cycle_credit(&p, now), 1);
+    }
+
+    /// Regression: a 23-of-25-min session that the user paused and *then*
+    /// reset should still credit one cycle. Earlier code only matched
+    /// `PomodoroMode::Work` and dropped the credit because pause flips the
+    /// mode to `Paused`.
+    #[test]
+    fn cycle_credit_one_when_paused_past_half_target() {
+        let now = Utc::now();
+        // started 30 min ago, paused 7 min later → 23 min credit, started_at frozen.
+        let started = now - chrono::Duration::seconds(30 * 60);
+        let p = pomodoro(PomodoroMode::Paused, Some(started), 23 * 60);
+        assert_eq!(pomodoro_reset_cycle_credit(&p, now), 1);
+    }
+
+    /// Regression: when paused, we must NOT add `(now - started_at)` to
+    /// `elapsed_seconds_before_pause` — that would credit the entire time
+    /// the user left the timer paused as productive work, and a brief 1-min
+    /// session paused for an hour would falsely credit a full cycle.
+    #[test]
+    fn cycle_credit_zero_when_paused_with_low_elapsed_long_pause() {
+        let now = Utc::now();
+        // started 2h ago, paused after 60 s → only 60 s of credit.
+        let started = now - chrono::Duration::hours(2);
+        let p = pomodoro(PomodoroMode::Paused, Some(started), 60);
+        assert_eq!(pomodoro_reset_cycle_credit(&p, now), 0);
+    }
 }

@@ -28,6 +28,10 @@ const MIGRATIONS: &[Migration] = &[
         version: 5,
         sql: include_str!("../migrations/0005_projects_and_ordering.sql"),
     },
+    Migration {
+        version: 6,
+        sql: include_str!("../migrations/0006_workspace_extras.sql"),
+    },
 ];
 
 pub fn apply(conn: &Connection) -> Result<()> {

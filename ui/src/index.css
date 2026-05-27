@@ -80,12 +80,6 @@
   --font-display: "Space Mono", "Geist Mono", ui-monospace, monospace;
   --font-serif: "Instrument Serif", "Iowan Old Style", Georgia, serif;
 
-  /* —— user-controlled (Settings modal) ——
-   * Defaults match `tessera_core::TerminalConfig::default()`; App.tsx
-   * overwrites these whenever the live settings store changes. */
-  --terminal-bg: #0F0F10;
-  --terminal-fg: #E8E8E6;
-
   /* —— motion —— */
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
@@ -944,9 +938,7 @@ body {
   flex: 1;
   min-height: 0;
   min-width: 0;
-  /* --terminal-bg comes from user settings (Settings → Terminal →
-   * Background). Falls back to --bg via the CSS-variable default. */
-  background: var(--terminal-bg, var(--bg));
+  background: var(--bg);
   outline: none;
   position: relative;
   overflow: hidden;
@@ -1453,6 +1445,417 @@ button[type="submit"]:hover:not(:disabled) {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* —— Workspace extras (Links / Tasks / Pomodoro) ——
+ * Right-side slide-in panel, ~320px wide, lives next to the Terminal in
+ * `.workspace-shell`. The toggle floats in the upper-right of the main
+ * pane so it never competes with the global top bar. */
+
+.workspace-shell {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  position: relative;
+}
+.workspace-shell > .overlay-anchor {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.workspace-extras-toggle {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 4;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-elevated);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color var(--t-micro), background-color var(--t-micro),
+    border-color var(--t-micro);
+}
+.workspace-extras-toggle:hover {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+}
+.workspace-extras-toggle--active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.extras-panel {
+  grid-column: 2;
+  grid-row: 1;
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface-elevated);
+  border-left: 1px solid var(--border-subtle);
+  animation: extras-slide-in var(--t-short) var(--ease-enter);
+}
+
+@keyframes extras-slide-in {
+  from {
+    transform: translateX(8px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.extras-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px 0 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.extras-tabs {
+  display: flex;
+  gap: 4px;
+}
+.extras-tab {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font: 500 12px/16px var(--font-ui);
+  letter-spacing: 0.01em;
+  padding: 8px 8px 6px;
+  margin-bottom: -1px;
+  cursor: pointer;
+  transition: color var(--t-micro), border-color var(--t-micro);
+}
+.extras-tab:hover {
+  color: var(--text-primary);
+}
+.extras-tab--active {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent);
+}
+.extras-panel-close {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  padding: 4px 6px;
+  border-radius: 4px;
+  transition: color var(--t-micro), background-color var(--t-micro);
+}
+.extras-panel-close:hover {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
+.extras-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+}
+.extras-tab-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* —— shared form controls inside the extras panel —— */
+.extras-input {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font: 400 13px/18px var(--font-ui);
+  padding: 6px 8px;
+  outline: none;
+  transition: border-color var(--t-micro);
+}
+.extras-input:focus {
+  border-color: var(--accent);
+}
+.extras-btn {
+  appearance: none;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font: 500 12px/16px var(--font-ui);
+  padding: 6px 10px;
+  cursor: pointer;
+  transition: background-color var(--t-micro), border-color var(--t-micro);
+}
+.extras-btn:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+}
+.extras-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.extras-btn--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+}
+.extras-btn--primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+.extras-error {
+  color: var(--crashed);
+  font-size: 12px;
+}
+
+/* —— links —— */
+.extras-link-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.extras-link-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.extras-link-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  transition: background-color var(--t-micro);
+}
+.extras-link-row:hover {
+  background: var(--surface-hover);
+}
+.extras-link-icon {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  display: inline-flex;
+}
+.extras-link-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.extras-link-text:hover {
+  color: var(--accent);
+}
+.extras-link-text--mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.extras-row-delete {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: var(--text-muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity var(--t-micro), color var(--t-micro),
+    background-color var(--t-micro);
+}
+.extras-link-row:hover .extras-row-delete,
+.extras-task-row:hover .extras-row-delete,
+.extras-row-delete:focus-visible {
+  opacity: 1;
+}
+.extras-row-delete:hover {
+  color: var(--crashed);
+  background: var(--surface);
+}
+
+/* —— tasks —— */
+.extras-task-form {
+  display: flex;
+}
+.extras-task-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.extras-task-list--done {
+  margin-top: 4px;
+  opacity: 0.7;
+}
+.extras-task-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  transition: background-color var(--t-micro);
+}
+.extras-task-row:hover {
+  background: var(--surface-hover);
+}
+.extras-task-checkbox {
+  flex-shrink: 0;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 3px;
+  background: var(--surface);
+  cursor: pointer;
+  position: relative;
+  transition: background-color var(--t-micro), border-color var(--t-micro);
+}
+.extras-task-checkbox:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.extras-task-checkbox:checked::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 0px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--bg);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+}
+.extras-task-title {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  word-break: break-word;
+}
+.extras-task-row--done .extras-task-title {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+.extras-task-due {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.extras-task-toggle-completed {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: var(--text-muted);
+  font: 500 12px/16px var(--font-ui);
+  text-align: left;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: color var(--t-micro), background-color var(--t-micro);
+}
+.extras-task-toggle-completed:hover {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
+/* —— pomodoro —— */
+.extras-pomodoro {
+  align-items: center;
+  text-align: center;
+  padding-top: 16px;
+  gap: 8px;
+}
+.extras-pomodoro-mode {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.extras-pomodoro-countdown {
+  font-family: var(--font-mono);
+  font-size: 48px;
+  line-height: 1.05;
+  font-weight: 500;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.extras-pomodoro-countdown--running {
+  color: var(--accent);
+}
+.extras-pomodoro-cycles {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.extras-pomodoro-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.extras-pomodoro-primary {
+  min-width: 88px;
+}
+
+/* —— empty state (mosaic motif from DESIGN.md) —— */
+.extras-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 24px 8px;
+  color: var(--text-muted);
+}
+.extras-empty-mosaic {
+  display: grid;
+  grid-template-columns: repeat(4, 8px);
+  grid-template-rows: repeat(2, 8px);
+  gap: 4px;
+  transform: rotate(-6deg);
+  opacity: 0.6;
+}
+.extras-empty-mosaic span {
+  width: 8px;
+  height: 8px;
+  background: var(--accent);
+  opacity: 0.18;
+  border-radius: 1px;
+}
+.extras-empty-mosaic span:nth-child(2n) {
+  opacity: 0.10;
+}
+.extras-empty-mosaic span:nth-child(3n) {
+  opacity: 0.06;
+}
+.extras-empty-message {
+  font-size: 12px;
+  text-align: center;
 }
 
 /* —— settings modal ——

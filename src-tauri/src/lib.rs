@@ -34,8 +34,11 @@ pub fn run() {
     let supervisor: Arc<Supervisor> = Arc::new(Supervisor::new());
 
     let worktree_root = data_dir.join("worktrees");
-    let workspace_service: Arc<WorkspaceService> =
-        Arc::new(WorkspaceService::new(db, supervisor.clone(), worktree_root));
+    let workspace_service: Arc<WorkspaceService> = Arc::new(WorkspaceService::new(
+        db.clone(),
+        supervisor.clone(),
+        worktree_root,
+    ));
 
     let registry: Arc<TerminalRegistry> = Arc::new(TerminalRegistry::new());
     let grid_sizes: GridSizes = Arc::new(Mutex::new(std::collections::HashMap::new()));
@@ -56,10 +59,12 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(supervisor.clone())
         .manage(workspace_service.clone())
         .manage(registry.clone())
         .manage(grid_sizes.clone())
+        .manage::<commands::DbState>(db.clone())
         .setup(move |app| {
             let handle = app.handle().clone();
 
@@ -232,6 +237,20 @@ pub fn run() {
             commands::list_directories,
             commands::save_paste_image,
             commands::terminal_scroll,
+            commands::workspace_links_list,
+            commands::workspace_links_add,
+            commands::workspace_links_delete,
+            commands::workspace_links_reorder,
+            commands::workspace_tasks_list,
+            commands::workspace_tasks_add,
+            commands::workspace_tasks_toggle,
+            commands::workspace_tasks_delete,
+            commands::workspace_tasks_reorder,
+            commands::workspace_pomodoro_get,
+            commands::workspace_pomodoro_start,
+            commands::workspace_pomodoro_pause,
+            commands::workspace_pomodoro_resume,
+            commands::workspace_pomodoro_reset,
             commands::settings_load,
             commands::settings_save,
             commands::settings_config_path,

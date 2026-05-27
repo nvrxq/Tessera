@@ -1,5 +1,6 @@
 //! SQLite-backed persistence for Tessera.
 
+pub mod extras;
 pub mod migrations;
 pub mod projects;
 pub mod workspaces;
@@ -50,6 +51,6 @@ mod tests {
         let version: i64 = conn
             .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
     }
 }
