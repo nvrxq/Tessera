@@ -2,9 +2,11 @@ import {
   createEffect,
   createResource,
   createSignal,
+  lazy,
   onCleanup,
   onMount,
   Show,
+  Suspense,
   type Component,
 } from "solid-js";
 import { message } from "@tauri-apps/plugin-dialog";
@@ -13,10 +15,15 @@ import { check as checkForAppUpdate, type Update } from "@tauri-apps/plugin-upda
 import Sidebar from "./Sidebar";
 import NewWorkspaceForm from "./NewWorkspaceForm";
 import ProjectsSettings from "./ProjectsSettings";
-import SettingsModal from "./SettingsModal";
-import ClaudeInventoryModal from "./ClaudeInventoryModal";
 import Terminal from "./Terminal";
-import WorkspaceExtrasPanel from "./WorkspaceExtrasPanel";
+// Modals are heavy and opened on demand. Lazy-load them so the initial
+// bundle drops the SettingsModal/ClaudeInventoryModal/WorkspaceExtrasPanel
+// payloads — the first click pays a one-frame fetch, every subsequent open
+// hits the in-memory cache. Wrapped in <Suspense fallback={null}> since a
+// blank frame on a button-click is invisible.
+const SettingsModal = lazy(() => import("./SettingsModal"));
+const ClaudeInventoryModal = lazy(() => import("./ClaudeInventoryModal"));
+const WorkspaceExtrasPanel = lazy(() => import("./WorkspaceExtrasPanel"));
 import {
   DEFAULT_CONFIG,
   loadSettings,
@@ -556,16 +563,18 @@ const App: Component = () => {
                   onSpawned={(sid) => onTerminalSpawned(selected()!.id, sid)}
                 />
                 <Show when={showExtras()}>
-                  <WorkspaceExtrasPanel
-                    workspaceId={selected()!.id}
-                    onClose={() => {
-                      setShowExtras(false);
-                      localStorage.setItem(
-                        extrasKey(selected()!.id),
-                        "0",
-                      );
-                    }}
-                  />
+                  <Suspense fallback={null}>
+                    <WorkspaceExtrasPanel
+                      workspaceId={selected()!.id}
+                      onClose={() => {
+                        setShowExtras(false);
+                        localStorage.setItem(
+                          extrasKey(selected()!.id),
+                          "0",
+                        );
+                      }}
+                    />
+                  </Suspense>
                 </Show>
               </div>
             </Show>
@@ -590,14 +599,18 @@ const App: Component = () => {
         />
       </Show>
       <Show when={showSettings()}>
-        <SettingsModal onClose={() => setShowSettings(false)} />
+        <Suspense fallback={null}>
+          <SettingsModal onClose={() => setShowSettings(false)} />
+        </Suspense>
       </Show>
       <Show when={showInventory()}>
-        <ClaudeInventoryModal
-          workspaceId={selected()?.id ?? null}
-          workspaceLabel={selected()?.name ?? null}
-          onClose={() => setShowInventory(false)}
-        />
+        <Suspense fallback={null}>
+          <ClaudeInventoryModal
+            workspaceId={selected()?.id ?? null}
+            workspaceLabel={selected()?.name ?? null}
+            onClose={() => setShowInventory(false)}
+          />
+        </Suspense>
       </Show>
     </div>
   );
