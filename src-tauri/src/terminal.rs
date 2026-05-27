@@ -53,6 +53,16 @@ struct SessionState {
     /// stream "snaps back" to current — that's how iTerm/Wezterm behave
     /// and avoids the "wait, I'm reading stale output" trap.
     scroll_offset: usize,
+    /// Reusable scratch buffer for the current tick's wire cells. Kept on
+    /// the session so we don't allocate a fresh `Vec<WireCell>` (1920 cap at
+    /// 80×24) every 1 ms render tick. Cleared at the top of each
+    /// `snapshot()` and refilled in place.
+    scratch_cells: Vec<WireCell>,
+    /// Reusable scratch buffer for one row of `GridCell`s. Passed into
+    /// `rows_iter_with_offset_into` so the grid iterator can refill it per
+    /// row instead of allocating a fresh `Vec<GridCell>` for every row of
+    /// every tick.
+    scratch_row: Vec<GridCell>,
 }
 
 pub struct TerminalRegistry {
@@ -99,6 +109,8 @@ impl TerminalRegistry {
             last_cols: cols,
             last_rows: rows,
             scroll_offset: 0,
+            scratch_cells: Vec::new(),
+            scratch_row: Vec::new(),
         });
         st.term.feed(bytes);
         // Snap back to live tail on every new chunk — see SessionState.
@@ -143,8 +155,8 @@ impl TerminalRegistry {
         let Some(st) = map.get_mut(&sid) else {
             return 0;
         };
-        let palette = self.palette.lock().unwrap_or_else(|e| e.into_inner());
-        let max = st.term.grid(&palette).scrollback_max();
+        // No palette lock — `scrollback_max` only reads `screen().phys_row(0)`.
+        let max = st.term.scrollback_max();
         let want = (st.scroll_offset as i64) + delta_back as i64;
         let clamped = want.clamp(0, max as i64) as usize;
         if clamped != st.scroll_offset {
@@ -157,6 +169,15 @@ impl TerminalRegistry {
     /// Snapshot the current grid. Returns a delta against the previous
     /// snapshot when sizes match; otherwise a full grid. Updates the
     /// stored last-sent buffer in either case.
+    ///
+    /// Allocation policy on the 1 ms render-tick hot path:
+    /// - `scratch_cells` is reused tick-to-tick — `clear()` + `extend()`
+    ///   keeps the underlying capacity, so we don't re-allocate 1920 entries
+    ///   per tick.
+    /// - `scratch_row` is reused row-to-row inside one tick — same trick.
+    /// - The delta-case `positions` / `cells` Vecs are necessarily fresh
+    ///   per emit (Tauri's serializer moves them by value), but they're
+    ///   typically tiny on a keystroke (1–3 cells).
     pub fn snapshot(&self, sid: Uuid) -> Option<Snapshot> {
         let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let st = map.get_mut(&sid)?;
@@ -165,33 +186,47 @@ impl TerminalRegistry {
         let total = (cols as usize) * (rows as usize);
         let cur = st.term.cursor();
 
-        // Build the current flat cell buffer. When `scroll_offset > 0` we
-        // sample N rows back into the scrollback buffer; otherwise it's
-        // the live viewport.
+        // Build the current flat cell buffer into the reusable scratch.
+        // When `scroll_offset > 0` we sample N rows back into the scrollback
+        // buffer; otherwise it's the live viewport.
+        //
+        // Borrow choreography: the row callback needs `&mut scratch_cells`
+        // AND we have to hand `for_each_row_with_offset` a `&mut scratch_row`
+        // — two disjoint fields of `*st`. Split them up-front so the closure
+        // only captures `scratch_cells`. NLL drops both before the if/else
+        // below touches `st.scratch_cells` again via `mem::swap`.
         let scroll_offset = st.scroll_offset;
-        let mut current: Vec<WireCell> = Vec::with_capacity(total);
         {
+            let scratch_cells = &mut st.scratch_cells;
+            let scratch_row = &mut st.scratch_row;
+            let term = &st.term;
+            scratch_cells.clear();
+            scratch_cells.reserve(total);
             let palette = self.palette.lock().unwrap_or_else(|e| e.into_inner());
-            let grid = st.term.grid(&palette);
-            for row in grid.rows_iter_with_offset(scroll_offset) {
-                for cell in &row {
-                    current.push(wire_cell(cell));
+            let grid = term.grid(&palette);
+            grid.for_each_row_with_offset(scroll_offset, scratch_row, |row| {
+                for cell in row.iter() {
+                    scratch_cells.push(wire_cell(cell));
                 }
-            }
+            });
         }
-        debug_assert_eq!(current.len(), total);
+        debug_assert_eq!(st.scratch_cells.len(), total);
 
         let needs_full =
             st.last_cells.len() != total || cols != st.last_cols || rows != st.last_rows;
 
         let snap = if needs_full {
-            // First snapshot or post-resize — send full grid. Keep our
-            // last_cells in sync by cloning the wire vec *once* into
-            // `st.last_cells` and moving `current` into the outgoing
-            // Snapshot (Tauri emit takes Snapshot by value). The opposite
-            // direction (move into last_cells, clone into Snapshot) would
-            // double-allocate 1920 cells × ~11 bytes for every full snap.
-            st.last_cells = current.clone();
+            // First snapshot or post-resize — send full grid. We have to
+            // hand a fresh `Vec<WireCell>` to Tauri (serializer moves by
+            // value), so allocate it once here and copy from scratch. Keep
+            // `last_cells` synced by swapping it with the scratch buffer:
+            // the scratch's allocation becomes the next `last_cells`, and
+            // the old `last_cells` (with its capacity intact) becomes the
+            // next tick's scratch. Either way, the *next* tick doesn't
+            // allocate, only this first-snapshot tick does.
+            let mut out: Vec<WireCell> = Vec::with_capacity(total);
+            out.extend_from_slice(&st.scratch_cells);
+            std::mem::swap(&mut st.last_cells, &mut st.scratch_cells);
             st.last_cols = cols;
             st.last_rows = rows;
             Snapshot {
@@ -199,7 +234,7 @@ impl TerminalRegistry {
                 cols,
                 rows,
                 full: true,
-                cells: current,
+                cells: out,
                 positions: Vec::new(),
                 cursor_col: cur.col,
                 cursor_row: cur.row,
@@ -207,16 +242,27 @@ impl TerminalRegistry {
                 cursor_shape: cursor_shape(&cur.shape),
             }
         } else {
-            // Diff: collect (index, cell) for cells that changed.
+            // Diff: collect (index, cell) for cells that changed. These
+            // Vecs are intentionally fresh each tick — they're typically
+            // 1–3 entries on a keystroke and get moved into the outgoing
+            // Snapshot anyway.
             let mut positions: Vec<u32> = Vec::new();
             let mut cells: Vec<WireCell> = Vec::new();
-            for (i, (new, old)) in current.iter().zip(st.last_cells.iter()).enumerate() {
+            for (i, (new, old)) in st
+                .scratch_cells
+                .iter()
+                .zip(st.last_cells.iter())
+                .enumerate()
+            {
                 if new != old {
                     positions.push(i as u32);
                     cells.push(*new);
                 }
             }
-            st.last_cells = current;
+            // Swap roles: scratch_cells holds the just-built grid → it
+            // becomes the new `last_cells`. The old `last_cells` (capacity
+            // intact) goes back to being scratch for the next tick.
+            std::mem::swap(&mut st.last_cells, &mut st.scratch_cells);
             st.last_cols = cols;
             st.last_rows = rows;
             Snapshot {

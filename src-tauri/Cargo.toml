@@ -45,3 +45,6 @@ dirs = "5"
 rusqlite = { version = "0.34", features = ["bundled"] }
 libc = "0.2"
 raw-window-handle = "0.6"
+
+[dev-dependencies]
+tempfile.workspace = true

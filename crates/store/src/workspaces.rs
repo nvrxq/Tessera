@@ -35,20 +35,21 @@ pub fn insert(conn: &Connection, ws: &Workspace) -> Result<()> {
 }
 
 pub fn get(conn: &Connection, id: Uuid) -> Result<Option<Workspace>> {
-    conn.query_row(
+    let mut stmt = conn.prepare_cached(
         "SELECT id, name, repo_path, worktree_path, branch, created_at, setup_status, \
                 detected_worktree, detected_branch, dangerous_skip_permissions, has_prior_session, \
                 project_id, sort_order \
          FROM workspaces WHERE id = ?1",
-        params![id.to_string()],
-        row_to_workspace,
-    )
-    .optional()
-    .map_err(Into::into)
+    )?;
+    stmt.query_row(params![id.to_string()], row_to_workspace)
+        .optional()
+        .map_err(Into::into)
 }
 
 pub fn list(conn: &Connection) -> Result<Vec<Workspace>> {
-    let mut stmt = conn.prepare(
+    // Hot path — workspace_list runs on every sidebar paint. Cache the
+    // statement so we skip re-parsing the SQL each call.
+    let mut stmt = conn.prepare_cached(
         "SELECT id, name, repo_path, worktree_path, branch, created_at, setup_status, \
                 detected_worktree, detected_branch, dangerous_skip_permissions, has_prior_session, \
                 project_id, sort_order \

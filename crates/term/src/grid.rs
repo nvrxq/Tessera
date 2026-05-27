@@ -79,6 +79,49 @@ impl<'a> Grid<'a> {
             })
     }
 
+    /// Zero-allocation per-row variant of `rows_iter_with_offset`. Reuses
+    /// `scratch` for every row — caller hands in one `Vec<GridCell>`, we
+    /// refill it row-by-row and invoke `f` with a borrow. Used by the
+    /// snapshot hot path (1 ms tick) to skip the `Vec::collect` per row
+    /// that `rows_iter_with_offset` would otherwise force.
+    pub fn for_each_row_with_offset<F>(
+        &self,
+        offset_back: usize,
+        scratch: &mut Vec<GridCell>,
+        mut f: F,
+    ) where
+        F: FnMut(&[GridCell]),
+    {
+        let screen = self.term.screen();
+        let cols = screen.physical_cols;
+        let rows = screen.physical_rows;
+        let palette = self.palette;
+        let top = screen.phys_row(0);
+        let start = top.saturating_sub(offset_back);
+        let blank = GridCell {
+            ch: ' ',
+            fg: palette.default_fg,
+            bg: palette.default_bg,
+            bold: false,
+            italic: false,
+            underline: false,
+            double_underline: false,
+            strikethrough: false,
+        };
+        for line in screen.lines_in_phys_range(start..start + rows) {
+            scratch.clear();
+            scratch.reserve(cols);
+            for c in line.visible_cells() {
+                scratch.push(GridCell::from_wez(&c.as_cell(), palette));
+            }
+            while scratch.len() < cols {
+                scratch.push(blank);
+            }
+            scratch.truncate(cols);
+            f(scratch);
+        }
+    }
+
     /// Maximum allowed `offset_back` — equals the number of physical rows
     /// of scrollback above the current viewport top.
     pub fn scrollback_max(&self) -> usize {

@@ -1,6 +1,7 @@
 use crate::session::{PtySession, SessionConfig};
 use anyhow::Result;
 use std::collections::HashMap;
+use std::io::Write;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use tokio::sync::broadcast;
@@ -51,11 +52,22 @@ impl Supervisor {
     }
 
     pub fn write(&self, session_id: Uuid, bytes: &[u8]) -> Result<()> {
-        let mut map = self.sessions.lock().unwrap();
-        let s = map
-            .get_mut(&session_id)
-            .ok_or_else(|| anyhow::anyhow!("unknown session {session_id}"))?;
-        s.write(bytes)
+        // Look up the session, clone out its writer handle, then DROP the
+        // sessions-map lock before doing the (potentially blocking)
+        // write+flush. Any other session is now free to write concurrently —
+        // before this split, a slow PTY pipe on one session would stall the
+        // entire app's input dispatch.
+        let writer = {
+            let map = self.sessions.lock().unwrap();
+            let s = map
+                .get(&session_id)
+                .ok_or_else(|| anyhow::anyhow!("unknown session {session_id}"))?;
+            s.writer_handle()
+        };
+        let mut w = writer.lock().unwrap_or_else(|e| e.into_inner());
+        w.write_all(bytes)?;
+        w.flush()?;
+        Ok(())
     }
 
     pub fn resize(&self, session_id: Uuid, cols: u16, rows: u16) -> Result<()> {
