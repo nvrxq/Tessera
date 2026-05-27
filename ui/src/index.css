@@ -1619,6 +1619,14 @@ button[type="submit"]:hover:not(:disabled) {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
 }
+/* Inline plus / text combo — keeps the icon at 12px with a thin gap so
+ * the row still reads as a single primary action, not a button group. */
+.extras-btn--with-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: center;
+}
 .extras-error {
   color: var(--crashed);
   font-size: 12px;
@@ -1699,6 +1707,40 @@ button[type="submit"]:hover:not(:disabled) {
 /* —— tasks —— */
 .extras-task-form {
   display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+/* Square pill on the right of the input — matches the close (×) icon's
+ * stroke weight and hover treatment. Without it the user has to know to
+ * press Enter, which is undiscoverable. */
+.extras-task-add {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: auto;
+  padding: 0;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-muted);
+  letter-spacing: 0;
+  text-transform: none;
+  cursor: pointer;
+  transition:
+    color var(--t-micro),
+    background-color var(--t-micro),
+    border-color var(--t-micro);
+}
+.extras-task-add:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.extras-task-add:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .extras-task-list {
   list-style: none;
@@ -1783,44 +1825,144 @@ button[type="submit"]:hover:not(:disabled) {
   background: var(--surface-hover);
 }
 
-/* —— pomodoro —— */
-.extras-pomodoro {
-  align-items: center;
-  text-align: center;
-  padding-top: 16px;
-  gap: 8px;
+/* —— pomodoro HUD (global, pinned to the sidebar foot) ——
+ * Compact one-line bar: mode dot + countdown in Geist Mono + play/pause
+ * pill. Click the bar to flip open a small popover with work/break/reset
+ * actions. Lives in the sidebar because the timer is app-wide and should
+ * be visible regardless of which workspace is selected. */
+.pomodoro-hud {
+  position: relative;
+  margin: 0 22px 12px;
 }
-.extras-pomodoro-mode {
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-.extras-pomodoro-countdown {
-  font-family: var(--font-mono);
-  font-size: 48px;
-  line-height: 1.05;
-  font-weight: 500;
-  color: var(--text-primary);
-  font-variant-numeric: tabular-nums;
-}
-.extras-pomodoro-countdown--running {
-  color: var(--accent);
-}
-.extras-pomodoro-cycles {
-  font-size: 12px;
-  color: var(--text-muted);
-}
-.extras-pomodoro-actions {
+.pomodoro-hud-bar {
   display: flex;
+  align-items: center;
   gap: 8px;
-  margin-top: 12px;
-  flex-wrap: wrap;
-  justify-content: center;
+  width: 100%;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  letter-spacing: 0;
+  text-transform: none;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  transition:
+    border-color var(--t-micro),
+    background-color var(--t-micro),
+    color var(--t-micro);
 }
-.extras-pomodoro-primary {
-  min-width: 88px;
+.pomodoro-hud-bar:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+.pomodoro-hud-bar--running {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+.pomodoro-hud-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--idle);
+  box-shadow: 0 0 0 1px var(--surface-elevated) inset;
+}
+.pomodoro-hud-dot--idle { background: var(--idle); }
+.pomodoro-hud-dot--work {
+  background: var(--accent);
+  box-shadow: 0 0 8px rgba(200, 130, 91, 0.55);
+  animation: dot-breathe 1.6s ease-in-out infinite;
+}
+.pomodoro-hud-dot--break {
+  background: var(--success);
+  box-shadow: 0 0 8px rgba(127, 189, 127, 0.45);
+}
+.pomodoro-hud-dot--paused {
+  background: var(--needs-input);
+  box-shadow: 0 0 8px rgba(230, 200, 76, 0.45);
+}
+.pomodoro-hud-countdown {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: inherit;
+  letter-spacing: 0.02em;
+}
+.pomodoro-hud-playpause {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    color var(--t-micro),
+    background-color var(--t-micro),
+    border-color var(--t-micro);
+}
+.pomodoro-hud-playpause:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.pomodoro-hud-popover {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  animation: workspace-menu-pop 120ms var(--ease-out) both;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pomodoro-hud-popover-cycles {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+.pomodoro-hud-popover-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.pomodoro-hud-action {
+  flex: 1;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  padding: 6px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background-color var(--t-micro), border-color var(--t-micro);
+}
+.pomodoro-hud-action:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 /* —— empty state (mosaic motif from DESIGN.md) —— */

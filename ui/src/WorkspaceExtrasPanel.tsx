@@ -1,30 +1,19 @@
 import {
-  createEffect,
   createResource,
   createSignal,
   For,
-  onCleanup,
-  onMount,
   Show,
   type Component,
 } from "solid-js";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
-  formatMmSs,
-  pomodoroRemainingSeconds,
   workspaceLinksAdd,
   workspaceLinksDelete,
   workspaceLinksList,
-  workspacePomodoroGet,
-  workspacePomodoroPause,
-  workspacePomodoroReset,
-  workspacePomodoroResume,
-  workspacePomodoroStart,
   workspaceTasksAdd,
   workspaceTasksDelete,
   workspaceTasksList,
   workspaceTasksToggle,
-  type PomodoroState,
   type WorkspaceLink,
   type WorkspaceTask,
 } from "./lib/extras";
@@ -34,16 +23,28 @@ export interface WorkspaceExtrasPanelProps {
   onClose: () => void;
 }
 
-type Tab = "links" | "tasks" | "pomodoro";
+type Tab = "links" | "tasks";
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "links", label: "Links" },
   { id: "tasks", label: "Tasks" },
-  { id: "pomodoro", label: "Pomodoro" },
 ];
 
+// Per-workspace storage of the last-selected tab. Pre-global-pomodoro
+// builds wrote "pomodoro" here; we now fall back to "links" so the panel
+// doesn't open on a dead tab id.
+const tabKey = (id: string) => `tessera.extrasTab:${id}`;
+function readStoredTab(id: string): Tab {
+  const v = localStorage.getItem(tabKey(id));
+  return v === "tasks" ? "tasks" : "links";
+}
+
 const WorkspaceExtrasPanel: Component<WorkspaceExtrasPanelProps> = (props) => {
-  const [tab, setTab] = createSignal<Tab>("links");
+  const [tab, setTab] = createSignal<Tab>(readStoredTab(props.workspaceId));
+  const selectTab = (next: Tab) => {
+    setTab(next);
+    localStorage.setItem(tabKey(props.workspaceId), next);
+  };
 
   return (
     <aside class="extras-panel" role="complementary" aria-label="Workspace extras">
@@ -57,7 +58,7 @@ const WorkspaceExtrasPanel: Component<WorkspaceExtrasPanelProps> = (props) => {
                 classList={{ "extras-tab--active": tab() === t.id }}
                 role="tab"
                 aria-selected={tab() === t.id}
-                onClick={() => setTab(t.id)}
+                onClick={() => selectTab(t.id)}
               >
                 {t.label}
               </button>
@@ -81,9 +82,6 @@ const WorkspaceExtrasPanel: Component<WorkspaceExtrasPanelProps> = (props) => {
         </Show>
         <Show when={tab() === "tasks"}>
           <TasksTab workspaceId={props.workspaceId} />
-        </Show>
-        <Show when={tab() === "pomodoro"}>
-          <PomodoroTab workspaceId={props.workspaceId} />
         </Show>
       </div>
     </aside>
@@ -158,10 +156,12 @@ const LinksTab: Component<{ workspaceId: string }> = (props) => {
         />
         <button
           type="submit"
-          class="extras-btn extras-btn--primary"
+          class="extras-btn extras-btn--primary extras-btn--with-icon"
           disabled={busy() || !url().trim()}
+          aria-label={busy() ? "Adding link" : "Add link"}
         >
-          {busy() ? "Adding…" : "Add link"}
+          <PlusIcon />
+          <span>{busy() ? "Adding…" : "Add link"}</span>
         </button>
         <Show when={error()}>
           <div class="extras-error">{error()}</div>
@@ -320,6 +320,19 @@ const TasksTab: Component<{ workspaceId: string }> = (props) => {
           disabled={busy()}
           maxLength={140}
         />
+        {/* Iconified submit so the affordance is visible — previously the
+          * form had no button at all, which left the action undiscoverable
+          * (you had to know to press Enter). The plus icon matches the
+          * link-add button's stroke weight. */}
+        <button
+          type="submit"
+          class="extras-task-add"
+          disabled={busy() || !title().trim()}
+          aria-label="Add task"
+          title="Add task"
+        >
+          <PlusIcon />
+        </button>
       </form>
 
       <Show
@@ -389,163 +402,6 @@ const TaskRow: Component<{
   );
 };
 
-// ---- Pomodoro ----
-
-const PomodoroTab: Component<{ workspaceId: string }> = (props) => {
-  const [state, setState] = createSignal<PomodoroState | null>(null);
-  // Re-rendered every second so the countdown ticks locally without
-  // burning a backend round-trip per second.
-  const [now, setNow] = createSignal(Date.now());
-  let intervalId: number | null = null;
-
-  const refresh = async () => {
-    try {
-      setState(await workspacePomodoroGet(props.workspaceId));
-    } catch (err) {
-      console.error("workspace_pomodoro_get failed", err);
-    }
-  };
-
-  // setInterval is paused while the OS sleeps or the window is hidden,
-  // but the server-side `started_at` keeps moving. Without re-anchoring
-  // after we come back, the countdown freezes at its pre-sleep value and
-  // drifts arbitrarily from reality. Re-fetch state from the backend on
-  // visibility/focus so the local clock snaps back to the server clock.
-  const onVis = () => {
-    if (document.visibilityState === "visible") void refresh();
-  };
-  const onFocus = () => void refresh();
-
-  onMount(() => {
-    void refresh();
-    intervalId = window.setInterval(() => setNow(Date.now()), 1000);
-    document.addEventListener("visibilitychange", onVis);
-    window.addEventListener("focus", onFocus);
-  });
-  onCleanup(() => {
-    if (intervalId != null) window.clearInterval(intervalId);
-    document.removeEventListener("visibilitychange", onVis);
-    window.removeEventListener("focus", onFocus);
-  });
-
-  // Refetch when the workspace id changes (panel mounts once per
-  // workspace, but be defensive — Solid will re-run this effect).
-  createEffect(() => {
-    void props.workspaceId;
-    void refresh();
-  });
-
-  const remaining = () => {
-    const s = state();
-    if (!s) return 0;
-    return pomodoroRemainingSeconds(s, now());
-  };
-
-  const modeLabel = () => {
-    const s = state();
-    if (!s) return "Idle";
-    switch (s.mode) {
-      case "work":
-        return "Work";
-      case "break":
-        return "Break";
-      case "paused":
-        return "Paused";
-      default:
-        return "Idle";
-    }
-  };
-
-  const primaryLabel = () => {
-    const s = state();
-    if (!s) return "Start";
-    if (s.mode === "work" || s.mode === "break") return "Pause";
-    if (s.mode === "paused") return "Resume";
-    return "Start";
-  };
-
-  const onPrimary = async () => {
-    const s = state();
-    if (!s) return;
-    try {
-      let next: PomodoroState;
-      if (s.mode === "idle") {
-        next = await workspacePomodoroStart(props.workspaceId, "work", null);
-      } else if (s.mode === "paused") {
-        next = await workspacePomodoroResume(props.workspaceId);
-      } else {
-        next = await workspacePomodoroPause(props.workspaceId);
-      }
-      setState(next);
-    } catch (err) {
-      console.error("pomodoro action failed", err);
-      void refresh();
-    }
-  };
-
-  const onReset = async () => {
-    try {
-      setState(await workspacePomodoroReset(props.workspaceId));
-    } catch (err) {
-      console.error("workspace_pomodoro_reset failed", err);
-      void refresh();
-    }
-  };
-
-  const onStartBreak = async () => {
-    try {
-      setState(await workspacePomodoroStart(props.workspaceId, "break", null));
-    } catch (err) {
-      console.error("workspace_pomodoro_start break failed", err);
-    }
-  };
-
-  return (
-    <div class="extras-tab-body extras-pomodoro">
-      <Show
-        when={state()}
-        fallback={<EmptyState message="Loading…" />}
-      >
-        <div class="extras-pomodoro-mode">{modeLabel()}</div>
-        <div
-          class="extras-pomodoro-countdown"
-          classList={{
-            "extras-pomodoro-countdown--running":
-              state()?.mode === "work" || state()?.mode === "break",
-          }}
-        >
-          {formatMmSs(remaining())}
-        </div>
-        <div class="extras-pomodoro-cycles">
-          {state()!.cycles_completed} cycle
-          {state()!.cycles_completed === 1 ? "" : "s"} today
-        </div>
-        <div class="extras-pomodoro-actions">
-          <button
-            type="button"
-            class="extras-btn extras-btn--primary extras-pomodoro-primary"
-            onClick={onPrimary}
-          >
-            {primaryLabel()}
-          </button>
-          <Show when={state()?.mode === "idle"}>
-            <button
-              type="button"
-              class="extras-btn"
-              onClick={onStartBreak}
-            >
-              Start break
-            </button>
-          </Show>
-          <button type="button" class="extras-btn" onClick={onReset}>
-            Reset
-          </button>
-        </div>
-      </Show>
-    </div>
-  );
-};
-
 // ---- shared bits ----
 
 const EmptyState: Component<{ message: string }> = (p) => (
@@ -569,6 +425,25 @@ const UrlIcon: Component = () => (
     <path d="M6.5 9.5l3-3" />
     <path d="M7 4.5l1.5-1.5a3 3 0 1 1 4.2 4.2L11 9" stroke-linecap="round" />
     <path d="M9 11.5L7.5 13a3 3 0 1 1-4.2-4.2L5 7" stroke-linecap="round" />
+  </svg>
+);
+
+// 12px plus glyph matching the stroke weight of the close (×) icon —
+// used on the "Add link" / "Add task" buttons so the action affordance is
+// visible at a glance.
+const PlusIcon: Component = () => (
+  <svg
+    viewBox="0 0 12 12"
+    width="12"
+    height="12"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.6"
+    stroke-linecap="round"
+    aria-hidden="true"
+  >
+    <path d="M6 2v8" />
+    <path d="M2 6h8" />
   </svg>
 );
 
