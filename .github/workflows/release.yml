@@ -8,6 +8,13 @@ on:
 permissions:
   contents: write
 
+# If the same tag is force-pushed (or two release runs queue up), keep
+# only the latest. Saves runner minutes during the inevitable retag-
+# fix-retag cycle of cutting a real release.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     strategy:

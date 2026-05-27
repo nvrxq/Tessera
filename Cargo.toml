@@ -40,6 +40,17 @@ split-debuginfo = "unpacked"
 
 [profile.release]
 strip = "symbols"
+# Build-speed tuning: dropped `lto = thin` (~30s saved on macOS-14) and
+# bumped codegen-units from 1 to 16 (parallel codegen, ~2 min saved on
+# cold builds). Trade-off is ~30% larger binary (12-14 MB → 16-18 MB),
+# which is fine for a desktop app downloaded once and auto-updated in
+# the background. `dist` profile below remains the tight-size build for
+# any future "ship a small binary" need.
+lto = false
+codegen-units = 16
+panic = "abort"
+
+[profile.dist]
+inherits = "release"
 lto = "thin"
 codegen-units = 1
-panic = "abort"
