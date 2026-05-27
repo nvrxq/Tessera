@@ -1879,7 +1879,9 @@ button[type="submit"]:hover:not(:disabled) {
   border-radius: 10px;
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
   width: 100%;
-  max-width: 720px;
+  /* Widened from 720 → 960 to make room for the live-preview column
+     while still leaving the form column comfortably readable. */
+  max-width: 960px;
   max-height: 80vh;
   display: flex;
   flex-direction: column;
@@ -1921,7 +1923,10 @@ button[type="submit"]:hover:not(:disabled) {
 
 .settings-body {
   display: grid;
-  grid-template-columns: 160px 1fr;
+  /* Third column is the sticky live-preview pane. minmax keeps it from
+     collapsing on narrow viewports but caps it at 360 so the form column
+     keeps the lion's share of horizontal space. */
+  grid-template-columns: 160px 1fr minmax(280px, 360px);
   min-height: 0;
   flex: 1;
   overflow: hidden;
@@ -2196,4 +2201,45 @@ button[type="submit"]:hover:not(:disabled) {
 .settings-primary:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* —— Live settings preview ————————————————————————————————————————
+   Sticky right column inside `.settings-body`. The canvas inside is
+   sized in CSS to a fixed 480×180 box (the actual backing store is
+   scaled by DPR in SettingsPreview.tsx), and we centre it inside a
+   card that matches the rest of the modal: surface-elevated, subtle
+   border, 10px radius, 12px inner padding. */
+.settings-preview-pane {
+  border-left: 1px solid var(--border-subtle);
+  padding: 18px 18px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* sticky inside an overflow-hidden grid cell that scrolls — keeps the
+     preview visible regardless of which section is active. */
+  position: sticky;
+  top: 0;
+  align-self: start;
+  background: var(--surface);
+  overflow: hidden;
+}
+.settings-preview-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.settings-preview-canvas {
+  display: block;
+  /* Width / height set inline by the component; the box is fixed so the
+     surrounding card doesn't reflow while the user drags the font-size
+     slider — the grid inside re-measures instead. */
+  width: 480px;
+  height: 180px;
+  max-width: 100%;
+  border-radius: 10px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg);
 }
