@@ -43,7 +43,10 @@ impl GridCell {
         // We still assert it in debug to catch a hypothetical wezterm-term
         // 8-bit / Latin-1 mode that hands back a raw high byte.
         let ch = if s.len() == 1 {
-            debug_assert!(s.is_ascii(), "single-byte cell str must be ASCII; got {s:?}");
+            debug_assert!(
+                s.is_ascii(),
+                "single-byte cell str must be ASCII; got {s:?}"
+            );
             s.as_bytes()[0] as char
         } else {
             s.nfkc().next().unwrap_or(' ')

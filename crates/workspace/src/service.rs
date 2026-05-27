@@ -11,9 +11,7 @@ use uuid::Uuid;
 /// trust the accent value enough to inject it straight into CSS.
 fn is_valid_hex_color(s: &str) -> bool {
     let bytes = s.as_bytes();
-    bytes.len() == 7
-        && bytes[0] == b'#'
-        && bytes[1..].iter().all(|b| b.is_ascii_hexdigit())
+    bytes.len() == 7 && bytes[0] == b'#' && bytes[1..].iter().all(|b| b.is_ascii_hexdigit())
 }
 
 pub struct WorkspaceService {
@@ -300,11 +298,7 @@ impl WorkspaceService {
     }
 
     /// Move a workspace into a project (or out, when `project_id` is `None`).
-    pub fn assign_project(
-        &self,
-        workspace_id: Uuid,
-        project_id: Option<Uuid>,
-    ) -> Result<()> {
+    pub fn assign_project(&self, workspace_id: Uuid, project_id: Option<Uuid>) -> Result<()> {
         let conn = self.db.lock().unwrap();
         if let Some(pid) = project_id {
             anyhow::ensure!(
@@ -552,10 +546,20 @@ mod tests {
         let ws = svc.create(&folder, "w", false, None).unwrap();
         assert_eq!(ws.project_id, None);
         svc.assign_project(ws.id, Some(p.id)).unwrap();
-        let row = svc.list().unwrap().into_iter().find(|w| w.id == ws.id).unwrap();
+        let row = svc
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|w| w.id == ws.id)
+            .unwrap();
         assert_eq!(row.project_id, Some(p.id));
         svc.assign_project(ws.id, None).unwrap();
-        let row = svc.list().unwrap().into_iter().find(|w| w.id == ws.id).unwrap();
+        let row = svc
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|w| w.id == ws.id)
+            .unwrap();
         assert_eq!(row.project_id, None);
     }
 
@@ -573,6 +577,8 @@ mod tests {
         let (svc, dir) = make_service();
         let folder = dir.path().join("any-folder");
         std::fs::create_dir_all(&folder).unwrap();
-        assert!(svc.create(&folder, "w", false, Some(Uuid::new_v4())).is_err());
+        assert!(svc
+            .create(&folder, "w", false, Some(Uuid::new_v4()))
+            .is_err());
     }
 }

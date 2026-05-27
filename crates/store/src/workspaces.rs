@@ -64,8 +64,7 @@ pub fn list(conn: &Connection) -> Result<Vec<Workspace>> {
 pub fn update_sort_orders(conn: &Connection, updates: &[(Uuid, i64)]) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
     {
-        let mut stmt =
-            tx.prepare("UPDATE workspaces SET sort_order = ?1 WHERE id = ?2")?;
+        let mut stmt = tx.prepare("UPDATE workspaces SET sort_order = ?1 WHERE id = ?2")?;
         for (id, order) in updates {
             stmt.execute(params![order, id.to_string()])?;
         }
@@ -75,11 +74,7 @@ pub fn update_sort_orders(conn: &Connection, updates: &[(Uuid, i64)]) -> Result<
 }
 
 /// Set or clear the project a workspace belongs to. `None` un-assigns.
-pub fn update_project(
-    conn: &Connection,
-    ws_id: Uuid,
-    project_id: Option<Uuid>,
-) -> Result<()> {
+pub fn update_project(conn: &Connection, ws_id: Uuid, project_id: Option<Uuid>) -> Result<()> {
     let n = conn.execute(
         "UPDATE workspaces SET project_id = ?1 WHERE id = ?2",
         params![project_id.map(|p| p.to_string()), ws_id.to_string()],
@@ -146,11 +141,7 @@ fn row_to_workspace(row: &rusqlite::Row<'_>) -> rusqlite::Result<Workspace> {
     let sort_order: i64 = row.get(12)?;
     let project_id = match project_id_s {
         Some(s) => Some(Uuid::parse_str(&s).map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(
-                11,
-                rusqlite::types::Type::Text,
-                Box::new(e),
-            )
+            rusqlite::Error::FromSqlConversionFailure(11, rusqlite::types::Type::Text, Box::new(e))
         })?),
         None => None,
     };
