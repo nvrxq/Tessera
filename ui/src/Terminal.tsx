@@ -63,6 +63,19 @@ function hexToInt(hex: string): number {
 
 const CURSOR_BLINK_MS = 530;
 
+/** Module-level cache of `ctx.measureText("M")`-derived cell metrics, keyed
+ *  by `"${px}px ${fontFamily}"`. measureText is a sync layout call (~tens of
+ *  microseconds, sometimes more on cold web-font load) and the result is a
+ *  pure function of the font shorthand — so we cache it once per (size,
+ *  family) pair and reuse across the whole app lifetime. Shared across all
+ *  Terminal instances since the cache is keyed on the actual font string;
+ *  no per-component invalidation is needed when settings change because a
+ *  changed font_size_px or font_family simply produces a new key. */
+const fontMetricsCache = new Map<
+  string,
+  { cellW: number; cellH: number; baseline: number }
+>();
+
 /** Claude Code's TUI frequently sends DECTCEM (`\e[?25l`) to hide the
  *  cursor, which then propagates faithfully through wezterm-term and lands
  *  in our snapshots as `cursor_visible: false`. The result for the user
@@ -320,7 +333,15 @@ export default function Terminal(props: TerminalProps) {
     const ctx = ctx2dOf();
     if (!ctx) return;
     const px = fontPx * dpr;
-    ctx.font = `${px}px ${fontFamily}`;
+    const key = `${px}px ${fontFamily}`;
+    const cached = fontMetricsCache.get(key);
+    if (cached) {
+      cellW = cached.cellW;
+      cellH = cached.cellH;
+      baseline = cached.baseline;
+      return;
+    }
+    ctx.font = key;
     const m = ctx.measureText("M");
     cellW = Math.max(1, Math.round(m.width));
     const ascent =
@@ -333,6 +354,7 @@ export default function Terminal(props: TerminalProps) {
         : px * 0.2;
     cellH = Math.max(1, Math.ceil((ascent + descent) * 1.25));
     baseline = Math.round(cellH - descent - (cellH - ascent - descent) * 0.5);
+    fontMetricsCache.set(key, { cellW, cellH, baseline });
   }
 
   function gridFromCanvas(): { cols: number; rows: number } {
