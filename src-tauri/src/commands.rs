@@ -2,7 +2,8 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::State;
+use tauri::{Emitter, State};
+use tessera_core::{config::config_path, UserConfig};
 use tessera_pty::session::SessionConfig;
 use tessera_pty::Supervisor;
 use uuid::Uuid;
@@ -396,6 +397,48 @@ pub fn terminal_scroll(
         let _ = app.emit("term_snapshot", snap);
     }
     Ok(new_offset)
+}
+
+// ---- Settings ----
+
+/// Read the user's settings file (or defaults if it doesn't exist / is
+/// malformed). Cheap on a cold call; no caching here — the frontend
+/// holds the canonical in-memory copy after first load.
+#[tauri::command]
+pub fn settings_load() -> Result<UserConfig, String> {
+    Ok(UserConfig::load_or_default(&config_path()))
+}
+
+/// Persist the settings and notify the frontend so live changes (palette,
+/// font, cursor) apply without a restart. The backend palette is hot-swapped
+/// here too — the next `term_snapshot` for every live session re-emits a
+/// `full` payload with the new colours.
+#[tauri::command]
+pub fn settings_save(
+    app: tauri::AppHandle,
+    registry: tauri::State<'_, TerminalRegistryState>,
+    config: UserConfig,
+) -> Result<(), String> {
+    let path = config_path();
+    config.save(&path).map_err(|e| e.to_string())?;
+
+    let palette = crate::terminal::palette_from_config(&config);
+    registry.set_palette(palette);
+
+    // Event is the only signal — UI components subscribe and re-derive
+    // their CSS variables, font sizes, etc. We send the new config as
+    // the event payload so subscribers don't have to round-trip back to
+    // disk on every change.
+    let _ = app.emit("settings_changed", &config);
+    Ok(())
+}
+
+/// Return the on-disk settings path so the user (or Claude Code on the
+/// user's behalf) can hand-edit the JSON file when easier than walking
+/// the modal. Returned even if the file doesn't exist yet.
+#[tauri::command]
+pub fn settings_config_path() -> String {
+    config_path().to_string_lossy().into_owned()
 }
 
 /// Persist a pasted image (PNG bytes, base64-encoded) to disk and return

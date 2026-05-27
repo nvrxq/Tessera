@@ -1,4 +1,12 @@
-import { createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
+import {
+  createEffect,
+  createSignal,
+  getOwner,
+  onCleanup,
+  onMount,
+  runWithOwner,
+  Show,
+} from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
@@ -6,6 +14,7 @@ import {
   readText as clipReadText,
   writeText as clipWriteText,
 } from "@tauri-apps/plugin-clipboard-manager";
+import { setTerminalFontSize, settings } from "./lib/settings";
 import { spawnAgent } from "./lib/workspaces";
 
 export interface TerminalProps {
@@ -41,21 +50,18 @@ interface Snapshot {
   cursor_shape: "block" | "bar" | "underline" | "hidden";
 }
 
-const FONT_FAMILY =
-  '"JetBrains Mono", "Geist Mono", "Fira Code", ui-monospace, Menlo, monospace';
-const DEFAULT_FONT_PX = 14;
 const MIN_FONT_PX = 8;
 const MAX_FONT_PX = 32;
-const DEFAULT_BG = 0x0f0f10;
-const DEFAULT_FG_HEX = "#E8E8E6";
 
-const FONT_PX_STORAGE_KEY = "tessera.fontPx";
-const loadFontPx = (): number => {
-  const raw = localStorage.getItem(FONT_PX_STORAGE_KEY);
-  const n = raw == null ? DEFAULT_FONT_PX : Number(raw);
-  if (!Number.isFinite(n)) return DEFAULT_FONT_PX;
-  return Math.min(MAX_FONT_PX, Math.max(MIN_FONT_PX, n));
-};
+/** Parse `#RRGGBB` → 0xRRGGBB int. Used to detect "this cell is the
+ *  default background, skip painting it" in the full-paint fast path. */
+function hexToInt(hex: string): number {
+  if (hex.length !== 7 || hex[0] !== "#") return 0x0f0f10;
+  const n = parseInt(hex.slice(1), 16);
+  return Number.isFinite(n) ? n : 0x0f0f10;
+}
+
+const CURSOR_BLINK_MS = 530;
 
 /** Claude Code's TUI frequently sends DECTCEM (`\e[?25l`) to hide the
  *  cursor, which then propagates faithfully through wezterm-term and lands
@@ -132,13 +138,51 @@ export default function Terminal(props: TerminalProps) {
     return ctx2d;
   };
 
-  let fontPx = loadFontPx();
+  // Snapshot values from the settings store. Live updates re-run the
+  // createEffect below so changes apply without remounting the canvas.
+  let fontPx = settings().terminal.font_size_px;
+  let fontFamily = settings().terminal.font_family;
+  let bgInt = hexToInt(settings().terminal.background);
+  let bgHex = settings().terminal.background;
+  let cursorColorHex = settings().terminal.cursor_color;
+  let cursorBlinkEnabled = settings().terminal.cursor_blink;
   const alwaysShowCursor = loadAlwaysShowCursor();
   let cellW = 0;
   let cellH = 0;
   let baseline = 0;
   let lastKeydownAt = 0;
   const spawning = new Set<string>();
+
+  // Cursor blink: `cursorBlinkVisible` toggles every CURSOR_BLINK_MS while
+  // the cursor is on; it's reset to true on every keystroke so the user
+  // never types into an "invisible" gap. Disabled when settings say so.
+  let cursorBlinkVisible = true;
+  let cursorBlinkTimer: number | null = null;
+  function stopCursorBlink() {
+    if (cursorBlinkTimer != null) {
+      window.clearInterval(cursorBlinkTimer);
+      cursorBlinkTimer = null;
+    }
+    cursorBlinkVisible = true;
+  }
+  function startCursorBlink() {
+    stopCursorBlink();
+    if (!cursorBlinkEnabled) return;
+    cursorBlinkTimer = window.setInterval(() => {
+      if (!lastCursorVisible) return;
+      cursorBlinkVisible = !cursorBlinkVisible;
+      const ctx = ctx2dOf();
+      if (!ctx) return;
+      const px = fontPx * (window.devicePixelRatio || 1);
+      const idx = lastCursorRow * gridCols + lastCursorCol;
+      if (idx >= 0 && idx < grid.length) {
+        paintCell(ctx, idx, px);
+      }
+      if (cursorBlinkVisible) {
+        paintCursor(ctx, lastCursorCol, lastCursorRow, lastCursorShape, px);
+      }
+    }, CURSOR_BLINK_MS);
+  }
 
   // ── Text selection on the canvas ──
   // Canvas2D has no DOM text, so we maintain our own grid selection.
@@ -271,7 +315,7 @@ export default function Terminal(props: TerminalProps) {
     const ctx = ctx2dOf();
     if (!ctx) return;
     const px = fontPx * dpr;
-    ctx.font = `${px}px ${FONT_FAMILY}`;
+    ctx.font = `${px}px ${fontFamily}`;
     const m = ctx.measureText("M");
     cellW = Math.max(1, Math.round(m.width));
     const ascent =
@@ -347,7 +391,7 @@ export default function Terminal(props: TerminalProps) {
       ctx.font =
         (bold ? "bold " : "") +
         (italic ? "italic " : "") +
-        `${px}px ${FONT_FAMILY}`;
+        `${px}px ${fontFamily}`;
       ctx.fillStyle = hexColor(cell.f);
       ctx.textBaseline = "alphabetic";
       ctx.fillText(cell.c, x, y + baseline);
@@ -383,10 +427,10 @@ export default function Terminal(props: TerminalProps) {
     const x = col * cellW;
     const y = row * cellH;
     // Bar/underline thickness: 10% of font px, floored to 2 device-pixels.
-    // The previous floor of 1 produced a 1-CSS-px bar at 14px that all but
-    // disappeared against `#0F0F10` on a low-DPI display.
+    // Floor of 1 produced a 1-CSS-px bar at 14px that all but disappeared
+    // against `#0F0F10` on a low-DPI display.
     const thick = Math.max(2, Math.round(px * 0.1));
-    ctx.fillStyle = DEFAULT_FG_HEX;
+    ctx.fillStyle = cursorColorHex;
     if (shape === "block") {
       ctx.globalAlpha = 0.6;
       ctx.fillRect(x, y, cellW, cellH);
@@ -402,10 +446,10 @@ export default function Terminal(props: TerminalProps) {
   function paintFull(px: number) {
     const ctx = ctx2dOf();
     if (!ctx) return;
-    ctx.fillStyle = "#0F0F10";
+    ctx.fillStyle = bgHex;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.textBaseline = "alphabetic";
-    ctx.font = `${px}px ${FONT_FAMILY}`;
+    ctx.font = `${px}px ${fontFamily}`;
 
     // Pass 1: backgrounds — batch contiguous non-default runs per row.
     for (let r = 0; r < gridRows; r++) {
@@ -414,7 +458,7 @@ export default function Terminal(props: TerminalProps) {
       let runStart = 0;
       for (let c = 0; c < gridCols; c++) {
         const cell = grid[r * gridCols + c];
-        const bg = cell.b !== DEFAULT_BG ? cell.b : -1;
+        const bg = cell.b !== bgInt ? cell.b : -1;
         if (bg !== runColor) {
           if (runColor >= 0) {
             ctx.fillStyle = hexColor(runColor);
@@ -466,7 +510,7 @@ export default function Terminal(props: TerminalProps) {
         const fontKey =
           (bold ? "bold " : "") +
           (italic ? "italic " : "") +
-          `${px}px ${FONT_FAMILY}`;
+          `${px}px ${fontFamily}`;
         const isBlank = cell.c === " " && (cell.a & 28) === 0;
         if (
           !isBlank &&
@@ -552,7 +596,7 @@ export default function Terminal(props: TerminalProps) {
       grid = snap.cells.slice();
       // grid may be shorter than cols*rows on first paint — pad blanks.
       while (grid.length < gridCols * gridRows) {
-        grid.push({ c: " ", f: 0xe8e8e6, b: DEFAULT_BG, a: 0 });
+        grid.push({ c: " ", f: hexToInt(settings().terminal.foreground), b: bgInt, a: 0 });
       }
       paintFull(px);
     } else {
@@ -740,146 +784,226 @@ export default function Terminal(props: TerminalProps) {
     unlisten = u;
   });
 
-  onMount(async () => {
+  onMount(() => {
+    // SolidJS resource owner — `onCleanup` calls registered after an
+    // `await` inside an async callback lose the implicit owner and are
+    // silently dropped. Capture it synchronously here and reattach via
+    // `runWithOwner` for every cleanup that lives past the first await.
+    const owner = getOwner();
     resizeCanvasBacking();
     measureCell(window.devicePixelRatio || 1);
-    await listenerReady;
 
-    const ro = new ResizeObserver(() => {
-      void syncGrid();
-    });
-    ro.observe(host);
-    onCleanup(() => ro.disconnect());
+    void (async () => {
+      await listenerReady;
 
-    // Drag-and-drop of files from Finder / file manager. Tauri 2 captures
-    // OS-level drag-drop and emits `tauri://drag-drop` with the absolute
-    // paths plus the drop position. HTML5 drop events do NOT fire while
-    // Tauri's interception is enabled, so we must go through the event.
-    //
-    // Position-gate: only attach to the active terminal if the drop landed
-    // inside its canvas. The sidebar and chrome shouldn't accept image
-    // attaches. Position from Tauri 2 on macOS is in CSS pixels, matching
-    // `canvas.getBoundingClientRect()`.
-    const dropUnlisten = await listen<{
-      paths: string[];
-      position: { x: number; y: number };
-    }>("tauri://drag-drop", (event) => {
-      const sid = activeSessionId;
-      if (!sid) return;
-      const { paths, position } = event.payload;
-      if (!paths || paths.length === 0) return;
-      const rect = canvas.getBoundingClientRect();
-      const inside =
-        position.x >= rect.left &&
-        position.x <= rect.right &&
-        position.y >= rect.top &&
-        position.y <= rect.bottom;
-      if (!inside) return;
-      // Claude Code accepts a path typed in as input and recognises image
-      // files as attachments — same flow as Alacritty's "type the dropped
-      // file path" behaviour. Multiple files: space-separated. Wrapped in
-      // bracketed-paste markers so the TUI treats it as one paste rather
-      // than per-char typing.
-      const payload = `\x1b[200~${paths.join(" ")}\x1b[201~`;
-      void ptyWriteString(sid, payload);
-    });
-    onCleanup(() => dropUnlisten());
+      const ro = new ResizeObserver(() => {
+        void syncGrid();
+      });
+      ro.observe(host);
 
-    function onKey(ev: KeyboardEvent) {
-      const sid = activeSessionId;
-      if (!sid) return;
-      lastKeydownAt = performance.now();
-      if (
-        (ev.ctrlKey || ev.metaKey) &&
-        (ev.key === "r" || ev.key === "R" || ev.key === "F5")
-      ) {
-        return;
-      }
-      if ((ev.ctrlKey || ev.metaKey) && !ev.altKey) {
-        if (ev.key === "=" || ev.key === "+") {
-          ev.preventDefault();
-          fontPx = Math.min(MAX_FONT_PX, fontPx + 1);
-          localStorage.setItem(FONT_PX_STORAGE_KEY, String(fontPx));
-          void syncGrid();
+      if (cursorBlinkEnabled) startCursorBlink();
+
+      // Drag-and-drop of files from Finder / file manager. Tauri 2 captures
+      // OS-level drag-drop and emits `tauri://drag-drop` with the absolute
+      // paths plus the drop position. HTML5 drop events do NOT fire while
+      // Tauri's interception is enabled, so we must go through the event.
+      //
+      // Position-gate: only attach to the active terminal if the drop landed
+      // inside its canvas. The sidebar and chrome shouldn't accept image
+      // attaches. Position from Tauri 2 on macOS is in CSS pixels, matching
+      // `canvas.getBoundingClientRect()`.
+      const dropUnlisten = await listen<{
+        paths: string[];
+        position: { x: number; y: number };
+      }>("tauri://drag-drop", (event) => {
+        const sid = activeSessionId;
+        if (!sid) return;
+        const { paths, position } = event.payload;
+        if (!paths || paths.length === 0) return;
+        const rect = canvas.getBoundingClientRect();
+        const inside =
+          position.x >= rect.left &&
+          position.x <= rect.right &&
+          position.y >= rect.top &&
+          position.y <= rect.bottom;
+        if (!inside) return;
+        // Claude Code accepts a path typed in as input and recognises image
+        // files as attachments — same flow as Alacritty's "type the dropped
+        // file path" behaviour. Multiple files: space-separated. Wrapped in
+        // bracketed-paste markers so the TUI treats it as one paste rather
+        // than per-char typing.
+        const payload = `\x1b[200~${paths.join(" ")}\x1b[201~`;
+        void ptyWriteString(sid, payload);
+      });
+
+      function onKey(ev: KeyboardEvent) {
+        const sid = activeSessionId;
+        if (!sid) return;
+        lastKeydownAt = performance.now();
+        // Cursor should always be visible while the user is actively
+        // typing; reset the blink phase so the cursor doesn't disappear
+        // mid-keystroke. The interval continues running.
+        if (cursorBlinkEnabled && !cursorBlinkVisible) {
+          cursorBlinkVisible = true;
+        }
+        if (
+          (ev.ctrlKey || ev.metaKey) &&
+          (ev.key === "r" || ev.key === "R" || ev.key === "F5")
+        ) {
           return;
         }
-        if (ev.key === "-" || ev.key === "_") {
-          ev.preventDefault();
-          fontPx = Math.max(MIN_FONT_PX, fontPx - 1);
-          localStorage.setItem(FONT_PX_STORAGE_KEY, String(fontPx));
-          void syncGrid();
-          return;
-        }
-        if (ev.key === "0") {
-          ev.preventDefault();
-          fontPx = DEFAULT_FONT_PX;
-          localStorage.setItem(FONT_PX_STORAGE_KEY, String(fontPx));
-          void syncGrid();
-          return;
-        }
-        // Copy / paste. macOS: Cmd+C/V. Linux convention: Ctrl+Shift+C/V
-        // (bare Ctrl+C must still pass through as SIGINT to the agent).
-        const isCopyPasteMod =
-          ev.metaKey || (ev.ctrlKey && ev.shiftKey);
-        if (isCopyPasteMod) {
-          const k = ev.key.toLowerCase();
-          if (k === "c") {
-            const range = selectionRange();
-            if (range && !selectionEmpty(range)) {
-              const text = selectionToText();
-              if (text) {
-                ev.preventDefault();
-                void clipWriteText(text).catch((e) =>
-                  console.warn("clipboard write failed", e),
-                );
-                return;
-              }
-            }
-            // No selection — let the event fall through so Ctrl+C
-            // (no shift, no meta) can still reach encodeKey → PTY SIGINT.
-            // With meta or ctrl+shift held we already know it's not SIGINT
-            // intent; swallow it silently.
-            if (ev.metaKey || ev.shiftKey) return;
-          }
-          if (k === "v") {
+        if ((ev.ctrlKey || ev.metaKey) && !ev.altKey) {
+          // Ctrl/Cmd +/- zooms the terminal font. Persist through the
+          // settings store (not localStorage) so the change is part of the
+          // user's settings JSON and the modal stays in sync. The
+          // settings_changed event re-runs our createEffect → fontPx and
+          // measureCell are reapplied automatically.
+          if (ev.key === "=" || ev.key === "+") {
             ev.preventDefault();
-            void (async () => {
-              // 1. Text on clipboard → paste as-is into PTY.
-              try {
-                const text = await clipReadText();
-                if (text) {
-                  await ptyWriteString(sid, text);
-                  return;
-                }
-              } catch {
-                /* No text — fall through to image. plugin-clipboard-manager
-                 *  rejects when the clipboard holds non-text formats. */
-              }
-              // 2. Image on clipboard → save PNG to disk, type the path
-              //    (bracketed-paste wrapped) so Claude Code attaches it.
-              try {
-                const path = await saveClipboardImageToDisk();
-                if (!path) return;
-                await ptyWriteString(sid, `\x1b[200~${path}\x1b[201~`);
-              } catch (e) {
-                console.warn("image paste failed", e);
-              }
-            })();
+            const next = Math.min(MAX_FONT_PX, fontPx + 1);
+            void setTerminalFontSize(next);
             return;
           }
+          if (ev.key === "-" || ev.key === "_") {
+            ev.preventDefault();
+            const next = Math.max(MIN_FONT_PX, fontPx - 1);
+            void setTerminalFontSize(next);
+            return;
+          }
+          if (ev.key === "0") {
+            ev.preventDefault();
+            void setTerminalFontSize(14);
+            return;
+          }
+          // Copy / paste. macOS: Cmd+C/V. Linux convention: Ctrl+Shift+C/V
+          // (bare Ctrl+C must still pass through as SIGINT to the agent).
+          const isCopyPasteMod =
+            ev.metaKey || (ev.ctrlKey && ev.shiftKey);
+          if (isCopyPasteMod) {
+            const k = ev.key.toLowerCase();
+            if (k === "c") {
+              const range = selectionRange();
+              if (range && !selectionEmpty(range)) {
+                const text = selectionToText();
+                if (text) {
+                  ev.preventDefault();
+                  void clipWriteText(text).catch((e) =>
+                    console.warn("clipboard write failed", e),
+                  );
+                  return;
+                }
+              }
+              // No selection — let the event fall through so Ctrl+C
+              // (no shift, no meta) can still reach encodeKey → PTY SIGINT.
+              // With meta or ctrl+shift held we already know it's not SIGINT
+              // intent; swallow it silently.
+              if (ev.metaKey || ev.shiftKey) return;
+            }
+            if (k === "v") {
+              ev.preventDefault();
+              void (async () => {
+                // 1. Text on clipboard → paste as-is into PTY.
+                try {
+                  const text = await clipReadText();
+                  if (text) {
+                    await ptyWriteString(sid, text);
+                    return;
+                  }
+                } catch {
+                  /* No text — fall through to image. plugin-clipboard-manager
+                   *  rejects when the clipboard holds non-text formats. */
+                }
+                // 2. Image on clipboard → save PNG to disk, type the path
+                //    (bracketed-paste wrapped) so Claude Code attaches it.
+                try {
+                  const path = await saveClipboardImageToDisk();
+                  if (!path) return;
+                  await ptyWriteString(sid, `\x1b[200~${path}\x1b[201~`);
+                } catch (e) {
+                  console.warn("image paste failed", e);
+                }
+              })();
+              return;
+            }
+          }
         }
+        const bytes = encodeKey(ev);
+        if (bytes.length === 0) return;
+        ev.preventDefault();
+        let bin = "";
+        for (const b of bytes) bin += String.fromCharCode(b);
+        void invoke("pty_write", { sessionId: sid, dataB64: btoa(bin) });
       }
-      const bytes = encodeKey(ev);
-      if (bytes.length === 0) return;
-      ev.preventDefault();
-      let bin = "";
-      for (const b of bytes) bin += String.fromCharCode(b);
-      void invoke("pty_write", { sessionId: sid, dataB64: btoa(bin) });
-    }
-    document.addEventListener("keydown", onKey);
-    onCleanup(() => document.removeEventListener("keydown", onKey));
+      document.addEventListener("keydown", onKey);
 
-    host.focus();
+      // Re-attach all post-await cleanups to the original component
+      // owner — without this, every `onCleanup` here would silently
+      // no-op because the owner ref is gone after the first `await`.
+      runWithOwner(owner, () => {
+        onCleanup(() => ro.disconnect());
+        onCleanup(() => stopCursorBlink());
+        onCleanup(() => dropUnlisten());
+        onCleanup(() => document.removeEventListener("keydown", onKey));
+      });
+
+      host.focus();
+    })();
+  });
+
+  // Live-react to settings changes: font / palette swaps re-measure the
+  // cell grid and force a full repaint. `prev*` guards skip re-syncs
+  // when the new value is identical (e.g. an unrelated section of the
+  // config changed — typing in the cursor color picker shouldn't
+  // re-measure the grid).
+  let prevFont = fontFamily;
+  let prevFontPx = fontPx;
+  let prevBg = bgHex;
+  let prevFg = settings().terminal.foreground;
+  let prevCursorColor = cursorColorHex;
+  let prevPalette = settings().terminal.palette.join("|");
+  let prevBlink = cursorBlinkEnabled;
+  createEffect(() => {
+    const cfg = settings();
+    fontFamily = cfg.terminal.font_family;
+    fontPx = cfg.terminal.font_size_px;
+    bgHex = cfg.terminal.background;
+    bgInt = hexToInt(bgHex);
+    cursorColorHex = cfg.terminal.cursor_color;
+    cursorBlinkEnabled = cfg.terminal.cursor_blink;
+    // Read foreground + palette through the signal so SolidJS tracks
+    // them as dependencies; without these reads, the effect never
+    // re-runs when the user picks a new foreground or ANSI swatch.
+    const fgHex = cfg.terminal.foreground;
+    const paletteKey = cfg.terminal.palette.join("|");
+    const fontChanged = prevFont !== fontFamily || prevFontPx !== fontPx;
+    const bgChanged = prevBg !== bgHex;
+    const fgChanged = prevFg !== fgHex;
+    const cursorColorChanged = prevCursorColor !== cursorColorHex;
+    const paletteChanged = prevPalette !== paletteKey;
+    const blinkChanged = prevBlink !== cursorBlinkEnabled;
+    prevFont = fontFamily;
+    prevFontPx = fontPx;
+    prevBg = bgHex;
+    prevFg = fgHex;
+    prevCursorColor = cursorColorHex;
+    prevPalette = paletteKey;
+    prevBlink = cursorBlinkEnabled;
+    if (fontChanged) {
+      void syncGrid();
+    } else if (bgChanged || fgChanged || cursorColorChanged || paletteChanged) {
+      // Grid dims unchanged — repaint with the new colours. Skip a
+      // backend resize round-trip; the existing grid mirror is still
+      // valid, only the pixels need to be redrawn. `paintFull` keys
+      // off the live `bgHex` / `cursorColorHex` / `settings()` reads
+      // inside the painters, so picking new colours takes effect on
+      // the next frame.
+      const dpr = window.devicePixelRatio || 1;
+      paintFull(fontPx * dpr);
+    }
+    if (blinkChanged) {
+      if (cursorBlinkEnabled) startCursorBlink();
+      else stopCursorBlink();
+    }
   });
 
   createEffect(() => {

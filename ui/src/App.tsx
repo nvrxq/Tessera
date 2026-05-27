@@ -1,11 +1,20 @@
-import { createResource, createSignal, onCleanup, onMount, Show, type Component } from "solid-js";
+import { createEffect, createResource, createSignal, onCleanup, onMount, Show, type Component } from "solid-js";
 import { ask, message } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check as checkForAppUpdate } from "@tauri-apps/plugin-updater";
 import Sidebar from "./Sidebar";
 import NewWorkspaceForm from "./NewWorkspaceForm";
 import ProjectsSettings from "./ProjectsSettings";
+import SettingsModal from "./SettingsModal";
 import Terminal from "./Terminal";
+import {
+  DEFAULT_CONFIG,
+  loadSettings,
+  onSettingsChanged,
+  saveSettings,
+  setSettings,
+  settings,
+} from "./lib/settings";
 import {
   createProject,
   deleteProject,
@@ -56,6 +65,7 @@ const App: Component = () => {
   const [selectedId, setSelectedId] = createSignal<string | null>(null);
   const [showNew, setShowNew] = createSignal(false);
   const [showProjects, setShowProjects] = createSignal(false);
+  const [showSettings, setShowSettings] = createSignal(false);
   const clock = useClock();
   const [theme, setTheme] = createSignal<Theme>(initialTheme());
   applyTheme(theme());
@@ -67,6 +77,24 @@ const App: Component = () => {
 
   let unlistenStatus: (() => void) | null = null;
   let unlistenWorktree: (() => void) | null = null;
+  let unlistenSettings: (() => void) | null = null;
+
+  // Push the user-controlled terminal background into a CSS variable so
+  // the canvas host (.overlay-anchor) and any other surface that wants
+  // to feel "in-terminal" can read it. We re-apply on every settings
+  // change. Keeping this in App (not Terminal) means even unrelated
+  // chrome stays in sync.
+  createEffect(() => {
+    const cfg = settings();
+    document.documentElement.style.setProperty(
+      "--terminal-bg",
+      cfg.terminal.background,
+    );
+    document.documentElement.style.setProperty(
+      "--terminal-fg",
+      cfg.terminal.foreground,
+    );
+  });
 
   // Background update check — fire-and-forget so a slow/missing endpoint
   // never delays first paint. Plugin-updater verifies the minisign
@@ -95,6 +123,38 @@ const App: Component = () => {
   })();
 
   onMount(async () => {
+    // Pull the persisted settings into the live store before any
+    // children render — Terminal reads `settings()` synchronously on
+    // setup, so racing the load means it would flash with defaults
+    // before the user's customisation takes effect.
+    try {
+      const cfg = await loadSettings();
+      // One-time migration: pre-settings.json builds stored the
+      // terminal font size in `localStorage.tessera.fontPx`. If the
+      // freshly-loaded config still carries the default size and the
+      // legacy key exists, adopt it and persist so the modal /
+      // settings file become the single source of truth.
+      const legacy = localStorage.getItem("tessera.fontPx");
+      if (
+        legacy &&
+        cfg.terminal.font_size_px === DEFAULT_CONFIG.terminal.font_size_px
+      ) {
+        const px = Number(legacy);
+        if (Number.isFinite(px) && px >= 8 && px <= 32) {
+          cfg.terminal.font_size_px = Math.round(px);
+          try {
+            await saveSettings(cfg);
+          } catch (e) {
+            console.warn("legacy fontPx migration save failed", e);
+          }
+        }
+        localStorage.removeItem("tessera.fontPx");
+      }
+      setSettings(cfg);
+    } catch (e) {
+      console.warn("settings_load failed; using defaults", e);
+    }
+    unlistenSettings = await onSettingsChanged((cfg) => setSettings(cfg));
     unlistenStatus = await onWorkspaceStatus((evt) => {
       mutate((list) =>
         list?.map((w) =>
@@ -119,6 +179,7 @@ const App: Component = () => {
   onCleanup(() => {
     unlistenStatus?.();
     unlistenWorktree?.();
+    unlistenSettings?.();
   });
 
   const selected = () => workspaces()?.find((w) => w.id === selectedId()) ?? null;
@@ -292,6 +353,22 @@ const App: Component = () => {
             <button
               type="button"
               class="topmeta-mode"
+              onClick={() => setShowSettings(true)}
+              title="Settings"
+              aria-label="Open settings"
+            >
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true">
+                <line x1="4" y1="7" x2="20" y2="7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+                <line x1="4" y1="12" x2="20" y2="12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+                <line x1="4" y1="17" x2="20" y2="17" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+                <circle cx="9" cy="7" r="2.2" fill="currentColor" />
+                <circle cx="15" cy="12" r="2.2" fill="currentColor" />
+                <circle cx="8" cy="17" r="2.2" fill="currentColor" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="topmeta-mode"
               onClick={toggleTheme}
               title={theme() === "dark" ? "Switch to light" : "Switch to dark"}
               aria-label="Toggle theme"
@@ -347,6 +424,9 @@ const App: Component = () => {
           onCreate={onCreateProject}
           onDelete={onDeleteProject}
         />
+      </Show>
+      <Show when={showSettings()}>
+        <SettingsModal onClose={() => setShowSettings(false)} />
       </Show>
     </div>
   );
