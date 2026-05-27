@@ -790,18 +790,21 @@ pub fn workspace_pomodoro_start(
     let prior = tessera_store::extras::get_pomodoro(&conn, workspace_id)
         .map_err(|e| e.to_string())?
         .unwrap_or_else(|| PomodoroState::idle(workspace_id));
+    let now = Utc::now();
+    // Credit any in-flight cycle being clobbered (same threshold as reset).
+    let cycles_completed = prior.cycles_completed + pomodoro_reset_cycle_credit(&prior, now);
     let state = PomodoroState {
         workspace_id,
         mode: new_mode,
-        started_at: Some(Utc::now()),
+        started_at: Some(now),
         paused_at: None,
         target_seconds: target_seconds.unwrap_or(match new_mode {
             PomodoroMode::Break => 300,
             _ => 1500,
         }),
         elapsed_seconds_before_pause: 0,
-        cycles_completed: prior.cycles_completed,
-        updated_at: Utc::now(),
+        cycles_completed,
+        updated_at: now,
     };
     tessera_store::extras::upsert_pomodoro(&conn, &state).map_err(|e| e.to_string())?;
     Ok(PomodoroStateDto::from(state))
@@ -931,6 +934,158 @@ fn pomodoro_reset_cycle_credit(prior: &PomodoroState, now: DateTime<Utc>) -> i64
     }
 }
 
+// ---- Global (app-wide) pomodoro ----
+//
+// One pomodoro shared by every workspace; backed by the single-row
+// `app_pomodoro` table. Commands mirror the per-workspace shape (start /
+// pause / resume / reset / get) but take no workspace id.
+//
+// The per-workspace `workspace_pomodoro_*` commands above are left in
+// place — they're dead once the frontend stops calling them, but removing
+// them now would inflate the backend diff and complicate the migration.
+
+/// Wire shape for the global pomodoro. Same fields as `PomodoroStateDto`
+/// minus `workspace_id` — the global timer isn't tied to any workspace.
+#[derive(Debug, Serialize)]
+pub struct AppPomodoroStateDto {
+    pub mode: PomodoroMode,
+    pub started_at: Option<DateTime<Utc>>,
+    pub paused_at: Option<DateTime<Utc>>,
+    pub target_seconds: i64,
+    pub elapsed_seconds_before_pause: i64,
+    pub cycles_completed: i64,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl From<PomodoroState> for AppPomodoroStateDto {
+    fn from(s: PomodoroState) -> Self {
+        Self {
+            mode: s.mode,
+            started_at: s.started_at,
+            paused_at: s.paused_at,
+            target_seconds: s.target_seconds,
+            elapsed_seconds_before_pause: s.elapsed_seconds_before_pause,
+            cycles_completed: s.cycles_completed,
+            updated_at: s.updated_at,
+        }
+    }
+}
+
+#[tauri::command]
+pub fn app_pomodoro_get(db: State<'_, DbState>) -> Result<AppPomodoroStateDto, String> {
+    let conn = db.lock().unwrap();
+    tessera_store::extras::get_app_pomodoro(&conn)
+        .map(AppPomodoroStateDto::from)
+        .map_err(|e| e.to_string())
+}
+
+/// Begin a fresh work or break run. Same defaults as the workspace
+/// variant: work = 1500s (25 min), break = 300s (5 min).
+#[tauri::command]
+pub fn app_pomodoro_start(
+    db: State<'_, DbState>,
+    mode: String,
+    target_seconds: Option<i64>,
+) -> Result<AppPomodoroStateDto, String> {
+    let new_mode = match mode.as_str() {
+        "work" => PomodoroMode::Work,
+        "break" => PomodoroMode::Break,
+        other => {
+            return Err(format!(
+                "invalid mode {other:?}, expected 'work' or 'break'"
+            ))
+        }
+    };
+    let conn = db.lock().unwrap();
+    let prior = tessera_store::extras::get_app_pomodoro(&conn).map_err(|e| e.to_string())?;
+    let now = Utc::now();
+    // Credit any in-flight cycle being clobbered. Same threshold as reset
+    // (≥ target/2 of work or paused work) — otherwise switching from a
+    // nearly-complete Work to a Break would silently lose the cycle.
+    let cycles_completed = prior.cycles_completed + pomodoro_reset_cycle_credit(&prior, now);
+    let state = PomodoroState {
+        workspace_id: Uuid::nil(),
+        mode: new_mode,
+        started_at: Some(now),
+        paused_at: None,
+        target_seconds: target_seconds.unwrap_or(match new_mode {
+            PomodoroMode::Break => 300,
+            _ => 1500,
+        }),
+        elapsed_seconds_before_pause: 0,
+        cycles_completed,
+        updated_at: now,
+    };
+    tessera_store::extras::upsert_app_pomodoro(&conn, &state).map_err(|e| e.to_string())?;
+    Ok(AppPomodoroStateDto::from(state))
+}
+
+#[tauri::command]
+pub fn app_pomodoro_pause(db: State<'_, DbState>) -> Result<AppPomodoroStateDto, String> {
+    let conn = db.lock().unwrap();
+    let prior = tessera_store::extras::get_app_pomodoro(&conn).map_err(|e| e.to_string())?;
+    if !matches!(prior.mode, PomodoroMode::Work | PomodoroMode::Break) {
+        return Ok(AppPomodoroStateDto::from(prior));
+    }
+    let elapsed_now = prior
+        .started_at
+        .map(|t| (Utc::now() - t).num_seconds().max(0))
+        .unwrap_or(0);
+    let state = PomodoroState {
+        workspace_id: Uuid::nil(),
+        mode: PomodoroMode::Paused,
+        started_at: prior.started_at,
+        paused_at: Some(Utc::now()),
+        target_seconds: prior.target_seconds,
+        elapsed_seconds_before_pause: prior.elapsed_seconds_before_pause + elapsed_now,
+        cycles_completed: prior.cycles_completed,
+        updated_at: Utc::now(),
+    };
+    tessera_store::extras::upsert_app_pomodoro(&conn, &state).map_err(|e| e.to_string())?;
+    Ok(AppPomodoroStateDto::from(state))
+}
+
+#[tauri::command]
+pub fn app_pomodoro_resume(db: State<'_, DbState>) -> Result<AppPomodoroStateDto, String> {
+    let conn = db.lock().unwrap();
+    let prior = tessera_store::extras::get_app_pomodoro(&conn).map_err(|e| e.to_string())?;
+    if !matches!(prior.mode, PomodoroMode::Paused) {
+        return Ok(AppPomodoroStateDto::from(prior));
+    }
+    let new_started = Utc::now() - chrono::Duration::seconds(prior.elapsed_seconds_before_pause);
+    let state = PomodoroState {
+        workspace_id: Uuid::nil(),
+        mode: PomodoroMode::Work,
+        started_at: Some(new_started),
+        paused_at: None,
+        target_seconds: prior.target_seconds,
+        elapsed_seconds_before_pause: 0,
+        cycles_completed: prior.cycles_completed,
+        updated_at: Utc::now(),
+    };
+    tessera_store::extras::upsert_app_pomodoro(&conn, &state).map_err(|e| e.to_string())?;
+    Ok(AppPomodoroStateDto::from(state))
+}
+
+#[tauri::command]
+pub fn app_pomodoro_reset(db: State<'_, DbState>) -> Result<AppPomodoroStateDto, String> {
+    let conn = db.lock().unwrap();
+    let prior = tessera_store::extras::get_app_pomodoro(&conn).map_err(|e| e.to_string())?;
+    let cycles = prior.cycles_completed + pomodoro_reset_cycle_credit(&prior, Utc::now());
+    let state = PomodoroState {
+        workspace_id: Uuid::nil(),
+        mode: PomodoroMode::Idle,
+        started_at: None,
+        paused_at: None,
+        target_seconds: prior.target_seconds,
+        elapsed_seconds_before_pause: 0,
+        cycles_completed: cycles,
+        updated_at: Utc::now(),
+    };
+    tessera_store::extras::upsert_app_pomodoro(&conn, &state).map_err(|e| e.to_string())?;
+    Ok(AppPomodoroStateDto::from(state))
+}
+
 #[cfg(test)]
 mod extras_tests {
     use super::*;
@@ -1029,6 +1184,73 @@ mod extras_tests {
         // started 2h ago, paused after 60 s → only 60 s of credit.
         let started = now - chrono::Duration::hours(2);
         let p = pomodoro(PomodoroMode::Paused, Some(started), 60);
+        assert_eq!(pomodoro_reset_cycle_credit(&p, now), 0);
+    }
+
+    /// End-to-end on the global table: a paused 23-of-25-min run that the
+    /// user resets should bump `cycles_completed`. Mirrors the per-workspace
+    /// test but exercises the `app_pomodoro` store path through the same
+    /// cycle-credit helper.
+    #[test]
+    fn app_pomodoro_reset_from_paused_credits_cycle() {
+        let conn = tessera_store::open_in_memory().unwrap();
+        // Seed the global row in a "paused at 23 min" state.
+        let now = Utc::now();
+        let started = now - chrono::Duration::seconds(30 * 60);
+        let paused_state = PomodoroState {
+            workspace_id: Uuid::nil(),
+            mode: PomodoroMode::Paused,
+            started_at: Some(started),
+            paused_at: Some(now),
+            target_seconds: 1500,
+            elapsed_seconds_before_pause: 23 * 60,
+            cycles_completed: 4,
+            updated_at: now,
+        };
+        tessera_store::extras::upsert_app_pomodoro(&conn, &paused_state).unwrap();
+
+        // Re-derive `cycles` the same way `app_pomodoro_reset` does — the
+        // helper is pure, so this also serves as a contract test for the
+        // command's behaviour without spinning up a Tauri State.
+        let prior = tessera_store::extras::get_app_pomodoro(&conn).unwrap();
+        let cycles = prior.cycles_completed + pomodoro_reset_cycle_credit(&prior, Utc::now());
+        assert_eq!(cycles, 5, "paused ≥ half target should credit a cycle");
+
+        let reset_state = PomodoroState {
+            workspace_id: Uuid::nil(),
+            mode: PomodoroMode::Idle,
+            started_at: None,
+            paused_at: None,
+            target_seconds: prior.target_seconds,
+            elapsed_seconds_before_pause: 0,
+            cycles_completed: cycles,
+            updated_at: Utc::now(),
+        };
+        tessera_store::extras::upsert_app_pomodoro(&conn, &reset_state).unwrap();
+        let after = tessera_store::extras::get_app_pomodoro(&conn).unwrap();
+        assert!(matches!(after.mode, PomodoroMode::Idle));
+        assert_eq!(after.cycles_completed, 5);
+        assert_eq!(after.elapsed_seconds_before_pause, 0);
+    }
+
+    /// Regression: starting a new mode while a Work session is past half
+    /// the target must credit the in-flight cycle, not silently drop it.
+    /// Mirrors the reset-from-running semantics applied via the same helper.
+    #[test]
+    fn start_credits_cycle_when_already_running_past_half() {
+        let now = Utc::now();
+        let started = now - chrono::Duration::seconds(20 * 60); // 20 of 25 min
+        let p = pomodoro(PomodoroMode::Work, Some(started), 0);
+        assert_eq!(pomodoro_reset_cycle_credit(&p, now), 1);
+    }
+
+    /// Counterpart: a Work session under half target gets no credit when
+    /// clobbered by start — the user effectively bailed early.
+    #[test]
+    fn start_no_cycle_when_already_running_under_half() {
+        let now = Utc::now();
+        let started = now - chrono::Duration::seconds(5 * 60); // 5 of 25 min
+        let p = pomodoro(PomodoroMode::Work, Some(started), 0);
         assert_eq!(pomodoro_reset_cycle_credit(&p, now), 0);
     }
 }

@@ -1,6 +1,7 @@
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import type { Component } from "solid-js";
 import { ask } from "@tauri-apps/plugin-dialog";
+import PomodoroHud from "./PomodoroHud";
 import {
   statusLabel,
   type AgentStatus,
@@ -347,6 +348,9 @@ const Sidebar: Component<SidebarProps> = (props) => {
         </span>
         <span class="sidebar-newbutton-label">New workspace</span>
       </button>
+      {/* Global pomodoro HUD pinned to the sidebar foot — visible from any
+        * workspace because the timer itself is app-wide, not per-workspace. */}
+      <PomodoroHud />
     </aside>
   );
 };

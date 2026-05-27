@@ -32,6 +32,10 @@ const MIGRATIONS: &[Migration] = &[
         version: 6,
         sql: include_str!("../migrations/0006_workspace_extras.sql"),
     },
+    Migration {
+        version: 7,
+        sql: include_str!("../migrations/0007_global_pomodoro.sql"),
+    },
 ];
 
 pub fn apply(conn: &Connection) -> Result<()> {
