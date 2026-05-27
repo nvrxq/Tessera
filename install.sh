@@ -33,7 +33,11 @@ ARCH="$(uname -m)"
 # to end-of-name so e.g. *.dmg.sig doesn't collide with *.dmg.
 case "$OS-$ARCH" in
   Darwin-arm64)   ASSET_RE='aarch64\.dmg$'        ;;
-  Darwin-x86_64)  ASSET_RE='x64\.dmg$'            ;;
+  Darwin-x86_64)
+    red "Intel Mac builds aren't published — please build from source:"
+    echo "  git clone https://github.com/$REPO.git && cd Tessera && ./scripts/build.sh"
+    exit 1
+    ;;
   Linux-x86_64)   ASSET_RE='amd64\.AppImage$'     ;;
   Linux-aarch64)  ASSET_RE='aarch64\.AppImage$'   ;;
   *)              red "unsupported platform: $OS-$ARCH"; exit 1 ;;

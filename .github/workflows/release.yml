@@ -14,12 +14,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Only Apple Silicon — free macos-13 (Intel) runners queue 10-20
+          # minutes routinely. Apple Silicon Mac coverage = "all Macs since
+          # 2020". Friends on Intel Macs can build from source.
           - platform: macos-14
             target: aarch64-apple-darwin
             label: macos-arm64
-          - platform: macos-13
-            target: x86_64-apple-darwin
-            label: macos-x64
           - platform: ubuntu-24.04
             target: ''
             label: linux-x64
