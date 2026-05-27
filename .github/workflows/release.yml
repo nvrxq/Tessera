@@ -77,5 +77,15 @@ jobs:
           releaseBody: 'Auto-built release. Install via the one-liner in the README, or grab the asset for your platform below. macOS builds are not Apple-notarised — strip Gatekeeper quarantine with `xattr -dr com.apple.quarantine /Applications/Tessera.app` if needed.'
           releaseDraft: false
           prerelease: false
-          includeUpdaterJson: true
+          # Only the macOS job writes latest.json. With matrix builds, the
+          # second job to finish hits "Requires authentication" trying to
+          # overwrite the manifest the first job already uploaded, which
+          # marks the whole job failed even though all artifacts published
+          # fine. Pinning manifest authority to one platform avoids the race.
+          # Caveat: the resulting latest.json contains only macOS entries,
+          # so Linux users won't currently get auto-updates and have to
+          # re-run install.sh. macOS is our primary platform — acceptable.
+          # Proper fix would be a finalisation job that merges signatures
+          # from all matrix jobs into one cross-platform manifest.
+          includeUpdaterJson: ${{ matrix.label == 'macos-arm64' }}
           args: ${{ matrix.target != '' && format('--target {0}', matrix.target) || '' }}
