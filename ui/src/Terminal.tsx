@@ -33,7 +33,12 @@ interface Snapshot {
   cursor_col: number;
   cursor_row: number;
   cursor_visible: boolean;
-  cursor_shape: "block" | "bar" | "underline";
+  /** "hidden" is reserved for future PTY backends that distinguish a
+   *  shape-level hide (e.g. nested fullscreen apps, password prompts)
+   *  from DECTCEM visibility. wezterm-term currently never emits it,
+   *  but the alwaysShowCursor override must still respect it when it
+   *  does — see `shouldShowCursor` below. */
+  cursor_shape: "block" | "bar" | "underline" | "hidden";
 }
 
 const FONT_FAMILY =
@@ -50,6 +55,34 @@ const loadFontPx = (): number => {
   const n = raw == null ? DEFAULT_FONT_PX : Number(raw);
   if (!Number.isFinite(n)) return DEFAULT_FONT_PX;
   return Math.min(MAX_FONT_PX, Math.max(MIN_FONT_PX, n));
+};
+
+/** Claude Code's TUI frequently sends DECTCEM (`\e[?25l`) to hide the
+ *  cursor, which then propagates faithfully through wezterm-term and lands
+ *  in our snapshots as `cursor_visible: false`. The result for the user
+ *  is "у меня нет курсора" — they never see a typing indicator. Override
+ *  the PTY's choice and paint our own cursor anyway when this is true.
+ *  Defaults to `true` so the cursor is visible out of the box; a future
+ *  Settings panel can flip this via the same key. */
+const ALWAYS_SHOW_CURSOR_KEY = "tessera.alwaysShowCursor";
+/** Old flat-namespaced key from before we standardised on `tessera.<field>`.
+ *  Migrated on first read; safe to drop entirely after a few releases. */
+const ALWAYS_SHOW_CURSOR_KEY_LEGACY = "tessera.term.alwaysShowCursor";
+const loadAlwaysShowCursor = (): boolean => {
+  // One-time migration: lift the value from the old key to the new one
+  // and remove the legacy entry. Only runs when the new key is absent
+  // and the old key is present, so it's idempotent across reloads.
+  let raw = localStorage.getItem(ALWAYS_SHOW_CURSOR_KEY);
+  if (raw === null) {
+    const legacy = localStorage.getItem(ALWAYS_SHOW_CURSOR_KEY_LEGACY);
+    if (legacy !== null) {
+      localStorage.setItem(ALWAYS_SHOW_CURSOR_KEY, legacy);
+      localStorage.removeItem(ALWAYS_SHOW_CURSOR_KEY_LEGACY);
+      raw = legacy;
+    }
+  }
+  if (raw === null) return true;
+  return raw !== "false" && raw !== "0";
 };
 
 export default function Terminal(props: TerminalProps) {
@@ -100,6 +133,7 @@ export default function Terminal(props: TerminalProps) {
   };
 
   let fontPx = loadFontPx();
+  const alwaysShowCursor = loadAlwaysShowCursor();
   let cellW = 0;
   let cellH = 0;
   let baseline = 0;
@@ -331,17 +365,27 @@ export default function Terminal(props: TerminalProps) {
     }
   }
 
+  /** Returns true if a cursor was actually painted, false if the call
+   *  was a no-op (out-of-bounds coords or hidden shape). The caller uses
+   *  this to decide whether to update `lastCursor*` state — otherwise a
+   *  no-op paint with bad coords would later trigger an erase at the
+   *  wrong cell on the next snapshot. */
   function paintCursor(
     ctx: CanvasRenderingContext2D,
     col: number,
     row: number,
     shape: Snapshot["cursor_shape"],
     px: number,
-  ) {
-    if (col < 0 || row < 0) return;
+  ): boolean {
+    if (col < 0 || row < 0) return false;
+    if (col >= gridCols || row >= gridRows) return false;
+    if (shape === "hidden") return false;
     const x = col * cellW;
     const y = row * cellH;
-    const thick = Math.max(1, Math.round(px * 0.1));
+    // Bar/underline thickness: 10% of font px, floored to 2 device-pixels.
+    // The previous floor of 1 produced a 1-CSS-px bar at 14px that all but
+    // disappeared against `#0F0F10` on a low-DPI display.
+    const thick = Math.max(2, Math.round(px * 0.1));
     ctx.fillStyle = DEFAULT_FG_HEX;
     if (shape === "block") {
       ctx.globalAlpha = 0.6;
@@ -352,6 +396,7 @@ export default function Terminal(props: TerminalProps) {
     } else {
       ctx.fillRect(x, y, thick, cellH);
     }
+    return true;
   }
 
   function paintFull(px: number) {
@@ -524,19 +569,50 @@ export default function Terminal(props: TerminalProps) {
     // Cursor: erase old, draw new. Each cursor cell is repainted via
     // paintCell to restore its underlying glyph + bg before deciding to
     // re-overlay the cursor on top.
+    //
+    // Two failure modes the previous code had:
+    //   1. Delta overpaint: when typing-echo lands in a delta whose
+    //      positions include the cursor's current cell, paintCell wipes
+    //      the cursor and we never re-stamp it (the erase branch only
+    //      fires when the cursor MOVED). Fix: always re-stamp when
+    //      `shouldShowCursor` is true, regardless of move.
+    //   2. Claude Code's TUI ships DECTCEM (\e[?25l) frequently —
+    //      wezterm-term faithfully reports `visible: false` and the
+    //      user sees no cursor at all ("у меня нет курсора"). Fix:
+    //      override with `alwaysShowCursor` (default `true`).
     const ctx = ctx2dOf();
     if (!ctx) return;
+    // Respect a backend-reported "hidden" shape even when the user opted
+    // into `alwaysShowCursor`: TUIs intentionally swap to Hidden for
+    // nested fullscreen apps and password prompts where leaking a cursor
+    // would be wrong (or, worse, security-sensitive).
+    const shouldShowCursor =
+      snap.cursor_visible ||
+      (alwaysShowCursor && snap.cursor_shape !== "hidden");
+    // Erase the previous cursor cell if we painted one AND either the
+    // position changed or we're about to stop painting a cursor. (If
+    // we're about to repaint at the SAME position, the unconditional
+    // paintCursor below covers it.)
     if (
       lastCursorVisible &&
-      (lastCursorCol !== snap.cursor_col || lastCursorRow !== snap.cursor_row)
+      (!shouldShowCursor ||
+        lastCursorCol !== snap.cursor_col ||
+        lastCursorRow !== snap.cursor_row)
     ) {
       const oldIdx = lastCursorRow * gridCols + lastCursorCol;
       if (oldIdx >= 0 && oldIdx < grid.length) {
         paintCell(ctx, oldIdx, px);
       }
     }
-    if (snap.cursor_visible) {
-      paintCursor(
+    // Track the actual paint outcome — if paintCursor clamps (OOB) or
+    // refuses (hidden shape), we must NOT remember the requested coords
+    // as "painted here". Otherwise the next snapshot's erase branch
+    // would compute `oldIdx = badRow * gridCols + badCol`, which for
+    // some OOB combinations wraps into a valid index on a different row
+    // and erases an unrelated cell. Only commit `last*` to what we drew.
+    let painted = false;
+    if (shouldShowCursor) {
+      painted = paintCursor(
         ctx,
         snap.cursor_col,
         snap.cursor_row,
@@ -544,10 +620,18 @@ export default function Terminal(props: TerminalProps) {
         px,
       );
     }
-    lastCursorCol = snap.cursor_col;
-    lastCursorRow = snap.cursor_row;
-    lastCursorVisible = snap.cursor_visible;
-    lastCursorShape = snap.cursor_shape;
+    if (painted) {
+      lastCursorCol = snap.cursor_col;
+      lastCursorRow = snap.cursor_row;
+      lastCursorVisible = true;
+      lastCursorShape = snap.cursor_shape;
+    } else {
+      // No cursor on screen this frame — invalidate the cached position
+      // so the next snapshot's erase branch can't fire on stale coords.
+      lastCursorVisible = false;
+      lastCursorCol = -1;
+      lastCursorRow = -1;
+    }
 
     // A delta path may have overpainted cells that the user has selected;
     // re-stamp the translucent overlay on top so the highlight survives.
