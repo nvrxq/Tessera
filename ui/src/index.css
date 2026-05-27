@@ -493,15 +493,23 @@ body {
   font-weight: 500;
   color: var(--text-primary);
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 6px;
   letter-spacing: -0.005em;
   line-height: 1.43;
-}
-.workspace-name-text {
-  overflow-wrap: anywhere;
   min-width: 0;
+}
+/* Single-line truncation. Earlier `overflow-wrap: anywhere` produced
+ * per-character wrapping for long single-token names (e.g. Cyrillic
+ * "Инкримент" stacked one letter per row when the project chip + ⚡
+ * badge ate the row width). Full name still available on hover via
+ * the `title` attribute the row sets. */
+.workspace-name-text {
   flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .dangerous-badge {
   flex-shrink: 0;
