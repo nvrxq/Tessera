@@ -2215,10 +2215,9 @@ button[type="submit"]:hover:not(:disabled) {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  /* sticky inside an overflow-hidden grid cell that scrolls — keeps the
-     preview visible regardless of which section is active. */
-  position: sticky;
-  top: 0;
+  /* The preview is its own grid cell; the grid pins it visually. `sticky`
+     would degrade to static here because the form column scrolls
+     independently and the preview has no scrollable ancestor. */
   align-self: start;
   background: var(--surface);
   overflow: hidden;

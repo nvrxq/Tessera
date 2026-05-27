@@ -30,12 +30,12 @@ interface Cell {
 
 const SPACE: Cell = { ch: " ", fg: -1 };
 
-/** Build a fixed-content mini-terminal — three lines that exercise the
- *  foreground colour (line 1), several ANSI palette slots including the
- *  bright range (line 2), and a `claude>` prompt with cursor (line 3).
- *  Returned as a row-major array of cells with one bit of metadata: the
- *  (col, row) where the cursor should sit, so the painter can stamp it
- *  after the glyph pass. */
+/** Build a fixed-content mini-terminal — four lines that exercise the
+ *  foreground colour (line 1), the standard ANSI palette slots (line 2),
+ *  the bright halves of the palette (line 3), and a `claude>` prompt with
+ *  cursor (line 4). Returned as a row-major array of cells with one bit
+ *  of metadata: the (col, row) where the cursor should sit, so the
+ *  painter can stamp it after the glyph pass. */
 function buildScene(cols: number, rows: number): {
   cells: Cell[];
   cursorCol: number;
@@ -73,10 +73,21 @@ function buildScene(cols: number, rows: number): {
   put(1, 50, ".env", 0);
   put(1, 55, "logs", 10);
 
-  // Line 3 — claude prompt; the cursor sits one cell past the `> `.
-  put(2, 0, "claude>", -1, true);
+  // Line 3 — ANSI bright-slot sampler. Single glyph per slot so the user
+  // gets visual feedback when editing bright red/yellow/blue/magenta/cyan
+  // /white (slots 9, 11, 12, 13, 14, 15) — none of which appear above.
+  put(2, 0, "ANSI", 8);
+  put(2, 5, "R", 9);
+  put(2, 7, "Y", 11);
+  put(2, 9, "B", 12);
+  put(2, 11, "M", 13);
+  put(2, 13, "C", 14);
+  put(2, 15, "W", 15);
+
+  // Line 4 — claude prompt; the cursor sits one cell past the `> `.
+  put(3, 0, "claude>", -1, true);
   const cursorCol = 8;
-  const cursorRow = 2;
+  const cursorRow = 3;
 
   return { cells, cursorCol, cursorRow };
 }
@@ -90,16 +101,18 @@ const SettingsPreview: Component<SettingsPreviewProps> = (props) => {
   // without re-running every cfg-tracking effect.
   let cursorVisible = true;
   let blinkTimer: number | null = null;
-  let paintQueued = false;
+  let rafHandle: number | null = null;
 
   /** Schedule a single repaint on the next animation frame. Coalesces
    *  bursts of effect re-runs (slider drag = one effect run per pixel)
-   *  into at most one paint per refresh. */
+   *  into at most one paint per refresh. The handle is tracked so
+   *  `onCleanup` can cancel a pending callback — otherwise it would fire
+   *  after the canvas is detached and read `props.cfg()` on a disposed
+   *  reactive owner. */
   function schedulePaint() {
-    if (paintQueued) return;
-    paintQueued = true;
-    requestAnimationFrame(() => {
-      paintQueued = false;
+    if (rafHandle != null) return;
+    rafHandle = requestAnimationFrame(() => {
+      rafHandle = null;
       paint();
     });
   }
@@ -160,7 +173,7 @@ const SettingsPreview: Component<SettingsPreviewProps> = (props) => {
     const baseline = Math.floor(cellH - descent - (cellH - ascent - descent) * 0.5);
 
     const cols = Math.max(10, Math.floor(canvas.width / cellW));
-    const rows = Math.max(3, Math.floor(canvas.height / cellH));
+    const rows = Math.max(4, Math.floor(canvas.height / cellH));
 
     // Background fill — uses cfg.background so the user sees the colour
     // they're picking applied to the whole pane (not just behind glyphs).
@@ -210,6 +223,13 @@ const SettingsPreview: Component<SettingsPreviewProps> = (props) => {
     // before we start measuring. Subsequent paints come from the
     // cfg-tracking effect and the blink interval.
     schedulePaint();
+    // Web fonts (Geist Mono) typically arrive after the first paint —
+    // `measureText` falls back to a system metric until they load and
+    // the preview's cell width is wrong by a few pixels. Re-paint once
+    // the font is available so the user sees the real layout.
+    if (typeof document !== "undefined" && document.fonts?.ready) {
+      void document.fonts.ready.then(() => schedulePaint());
+    }
   });
 
   // Track every relevant cfg field. Reading each one inside the effect
@@ -236,6 +256,10 @@ const SettingsPreview: Component<SettingsPreviewProps> = (props) => {
     if (blinkTimer != null) {
       window.clearInterval(blinkTimer);
       blinkTimer = null;
+    }
+    if (rafHandle != null) {
+      cancelAnimationFrame(rafHandle);
+      rafHandle = null;
     }
   });
 
