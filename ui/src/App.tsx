@@ -6,6 +6,7 @@ import Sidebar from "./Sidebar";
 import NewWorkspaceForm from "./NewWorkspaceForm";
 import ProjectsSettings from "./ProjectsSettings";
 import Terminal from "./Terminal";
+import WorkspaceExtrasPanel from "./WorkspaceExtrasPanel";
 import {
   createProject,
   deleteProject,
@@ -56,6 +57,19 @@ const App: Component = () => {
   const [selectedId, setSelectedId] = createSignal<string | null>(null);
   const [showNew, setShowNew] = createSignal(false);
   const [showProjects, setShowProjects] = createSignal(false);
+  // Right-side extras panel (Links / Tasks / Pomodoro). Persisted across the
+  // session lifetime via localStorage so reopening Tessera with the panel
+  // open doesn't force the user to re-toggle it.
+  const [showExtras, setShowExtras] = createSignal(
+    localStorage.getItem("tessera.extrasOpen") === "1",
+  );
+  const toggleExtras = () => {
+    setShowExtras((v) => {
+      const next = !v;
+      localStorage.setItem("tessera.extrasOpen", next ? "1" : "0");
+      return next;
+    });
+  };
   const clock = useClock();
   const [theme, setTheme] = createSignal<Theme>(initialTheme());
   applyTheme(theme());
@@ -322,11 +336,36 @@ const App: Component = () => {
               />
             </Show>
             <Show when={!showNew() && selected()?.id}>
-              <Terminal
-                workspaceId={selected()!.id}
-                sessionId={selected()?.session_id ?? null}
-                onSpawned={(sid) => onTerminalSpawned(selected()!.id, sid)}
-              />
+              <div class="workspace-shell">
+                <button
+                  type="button"
+                  class="workspace-extras-toggle"
+                  classList={{ "workspace-extras-toggle--active": showExtras() }}
+                  onClick={toggleExtras}
+                  title={showExtras() ? "Hide extras panel" : "Show extras panel"}
+                  aria-label="Toggle extras panel"
+                  aria-pressed={showExtras()}
+                >
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true">
+                    <rect x="3" y="4" width="13" height="16" rx="1.5" stroke="currentColor" stroke-width="1.6" />
+                    <rect x="17" y="4" width="4" height="16" rx="1" fill="currentColor" />
+                  </svg>
+                </button>
+                <Terminal
+                  workspaceId={selected()!.id}
+                  sessionId={selected()?.session_id ?? null}
+                  onSpawned={(sid) => onTerminalSpawned(selected()!.id, sid)}
+                />
+                <Show when={showExtras()}>
+                  <WorkspaceExtrasPanel
+                    workspaceId={selected()!.id}
+                    onClose={() => {
+                      setShowExtras(false);
+                      localStorage.setItem("tessera.extrasOpen", "0");
+                    }}
+                  />
+                </Show>
+              </div>
             </Show>
             <Show when={!showNew() && !selected()}>
               <section class="hero">
