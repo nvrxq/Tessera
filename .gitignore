@@ -10,3 +10,9 @@
 /docs
 # local cargo overrides (target dir, custom rustflags)
 /.cargo/config.toml
+# Mobile / Windows-store icon variants that `cargo tauri icon` spits out
+# but we don't currently ship.
+/src-tauri/icons/android
+/src-tauri/icons/ios
+/src-tauri/icons/Square*.png
+/src-tauri/icons/StoreLogo.png
