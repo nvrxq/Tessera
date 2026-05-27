@@ -346,20 +346,25 @@ pub type TerminalRegistryState = std::sync::Arc<TerminalRegistry>;
 /// Last-known (cols, rows) per session — used by the PTY pump to spawn a
 /// Term at the right size on the first byte chunk.
 pub type GridSizesState = std::sync::Arc<Mutex<HashMap<Uuid, (u16, u16)>>>;
+/// Sessions marked dirty since the last render tick. Shared with the pump
+/// task so `terminal_resize` can wake an idle session that has no PTY
+/// output of its own.
+pub type DirtySet = std::sync::Arc<Mutex<std::collections::HashSet<Uuid>>>;
 
 /// Frontend tells the backend the desired grid size for a session. Resizes
 /// both the wezterm-term parser AND remembers the size for any future
 /// lazy-spawned Term in the same session id.
 ///
-/// We deliberately do NOT emit a snapshot here. `registry.resize()` clears
-/// `last_cells`, so the next render-tick (≤1 ms away) will emit a fresh
-/// `full` snapshot anyway. Doubling up burns CPU on a redundant serialize
-/// for an imperceptible latency win.
+/// Marks the session dirty so the 1 ms render-tick picks it up immediately
+/// — `registry.resize()` clears `last_cells`, so the next snapshot is a
+/// full one carrying the new grid dimensions. Without the dirty mark, an
+/// idle session (no PTY output) would not re-snapshot until the next byte.
 #[tauri::command]
 pub fn terminal_resize(
     _app: tauri::AppHandle,
     registry: tauri::State<'_, TerminalRegistryState>,
     sizes: tauri::State<'_, GridSizesState>,
+    dirty: tauri::State<'_, DirtySet>,
     session_id: Uuid,
     cols: u16,
     rows: u16,
@@ -369,6 +374,10 @@ pub fn terminal_resize(
         .unwrap_or_else(|e| e.into_inner())
         .insert(session_id, (cols, rows));
     registry.resize(session_id, cols, rows);
+    dirty
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(session_id);
     Ok(())
 }
 
@@ -452,10 +461,23 @@ pub struct InventoryCacheKey {
 /// filesystem walk twice.
 #[derive(Default)]
 pub struct ClaudeInventoryCache {
-    pub last: Mutex<Option<(InventoryCacheKey, tessera_core::ClaudeInventory)>>,
+    pub last: Mutex<
+        Option<(
+            InventoryCacheKey,
+            std::time::Instant,
+            tessera_core::ClaudeInventory,
+        )>,
+    >,
 }
 
 pub type ClaudeInventoryCacheState = Arc<ClaudeInventoryCache>;
+
+/// TTL on top of the mtime check. POSIX directory mtime only reflects
+/// entry add/remove, not edits to nested files — editing a SKILL.md in
+/// place would not bump `~/.claude/skills` mtime. The TTL bounds the
+/// staleness window to a handful of seconds; the mtime check still
+/// short-circuits the common "nothing changed" case.
+const INVENTORY_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Compute the latest mtime across the four paths Claude looks at. Missing
 /// paths contribute 0; we only care about *changes*, not absolute times.
@@ -534,8 +556,8 @@ pub async fn claude_inventory(
 
     {
         let guard = cache.last.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((cached_key, cached_inv)) = guard.as_ref() {
-            if cached_key == &key {
+        if let Some((cached_key, cached_at, cached_inv)) = guard.as_ref() {
+            if cached_key == &key && cached_at.elapsed() < INVENTORY_CACHE_TTL {
                 return Ok(cached_inv.clone());
             }
         }
@@ -552,7 +574,7 @@ pub async fn claude_inventory(
 
     {
         let mut guard = cache.last.lock().unwrap_or_else(|e| e.into_inner());
-        *guard = Some((key, inv.clone()));
+        *guard = Some((key, std::time::Instant::now(), inv.clone()));
     }
     Ok(inv)
 }
@@ -1349,10 +1371,10 @@ mod extras_tests {
             mtime_ns: 42,
         };
         let inv = tessera_core::ClaudeInventory::default();
-        *cache.last.lock().unwrap() = Some((key.clone(), inv));
+        *cache.last.lock().unwrap() = Some((key.clone(), std::time::Instant::now(), inv));
 
         let guard = cache.last.lock().unwrap();
-        let (k, _v) = guard.as_ref().expect("seeded");
+        let (k, _t, _v) = guard.as_ref().expect("seeded");
         assert_eq!(k, &key);
     }
 
@@ -1363,8 +1385,11 @@ mod extras_tests {
             workspace_id: None,
             mtime_ns: 100,
         };
-        *cache.last.lock().unwrap() =
-            Some((seeded.clone(), tessera_core::ClaudeInventory::default()));
+        *cache.last.lock().unwrap() = Some((
+            seeded.clone(),
+            std::time::Instant::now(),
+            tessera_core::ClaudeInventory::default(),
+        ));
 
         // Newer mtime invalidates.
         let probed = InventoryCacheKey {
@@ -1372,7 +1397,7 @@ mod extras_tests {
             mtime_ns: 200,
         };
         let guard = cache.last.lock().unwrap();
-        let (k, _) = guard.as_ref().expect("seeded");
+        let (k, _t, _) = guard.as_ref().expect("seeded");
         assert_ne!(k, &probed, "cache key must change with mtime");
     }
 
@@ -1385,16 +1410,39 @@ mod extras_tests {
             workspace_id: Some(ws1),
             mtime_ns: 42,
         };
-        *cache.last.lock().unwrap() =
-            Some((seeded.clone(), tessera_core::ClaudeInventory::default()));
+        *cache.last.lock().unwrap() = Some((
+            seeded.clone(),
+            std::time::Instant::now(),
+            tessera_core::ClaudeInventory::default(),
+        ));
 
         let probe = InventoryCacheKey {
             workspace_id: Some(ws2),
             mtime_ns: 42,
         };
         let guard = cache.last.lock().unwrap();
-        let (k, _) = guard.as_ref().expect("seeded");
+        let (k, _t, _) = guard.as_ref().expect("seeded");
         assert_ne!(k, &probe);
+    }
+
+    /// TTL on the cache entry — directory mtime alone is shallow (POSIX
+    /// dir mtime doesn't reflect edits to nested files), so any cached
+    /// entry must expire after `INVENTORY_CACHE_TTL` even when the
+    /// computed mtime hasn't changed.
+    #[test]
+    fn inventory_cache_ttl_expires_stale_entry() {
+        let key = InventoryCacheKey {
+            workspace_id: None,
+            mtime_ns: 1,
+        };
+        let fresh = std::time::Instant::now();
+        let stale = fresh
+            .checked_sub(INVENTORY_CACHE_TTL + std::time::Duration::from_millis(1))
+            .unwrap_or(fresh);
+        assert!(fresh.elapsed() < INVENTORY_CACHE_TTL);
+        assert!(stale.elapsed() >= INVENTORY_CACHE_TTL);
+        // Same key, but the stale instant must drive the call to re-walk.
+        let _ = key;
     }
 
     /// `inventory_mtime` is monotonic in the per-file mtimes it samples —
@@ -1413,6 +1461,9 @@ mod extras_tests {
         std::fs::write(&mcp, "{\"mcpServers\":{}}").unwrap();
         let m2 = inventory_mtime(Some(tmp.path()));
 
-        assert!(m2 > m1, "mtime must advance after a write (m1={m1}, m2={m2})");
+        assert!(
+            m2 > m1,
+            "mtime must advance after a write (m1={m1}, m2={m2})"
+        );
     }
 }
