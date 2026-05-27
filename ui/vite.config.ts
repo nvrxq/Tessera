@@ -17,9 +17,13 @@ export default defineConfig({
         // code don't bust the cached vendor JS — disk cache hit-rate
         // jumps and cold start after an update is noticeably faster.
         manualChunks: (id) => {
-          if (id.includes("node_modules/solid-js")) return "vendor-solid";
-          if (id.includes("node_modules/@tauri-apps")) return "vendor-tauri";
-          if (id.includes("node_modules/@fontsource")) return "vendor-fonts";
+          // Normalise Windows path separators so the filter still matches
+          // when this repo is built on Windows (Vite leaves the OS-native
+          // separator in `id`).
+          const norm = id.replace(/\\/g, "/");
+          if (norm.includes("node_modules/solid-js")) return "vendor-solid";
+          if (norm.includes("node_modules/@tauri-apps")) return "vendor-tauri";
+          if (norm.includes("node_modules/@fontsource")) return "vendor-fonts";
         },
       },
     },

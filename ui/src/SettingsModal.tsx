@@ -27,7 +27,11 @@ import SettingsPreview from "./SettingsPreview";
  *  user drag a slider smoothly while coalescing per-pixel updates into
  *  ~one IPC every refresh frame. The SettingsPreview reads the draft
  *  directly (no debounce) so the in-modal preview stays snappy. */
-const DRAFT_COMMIT_DEBOUNCE_MS = 60;
+// 200 ms ≈ 5 commits/sec during a fast slider drag — still feels live in
+// the preview, but doesn't flood the Rust side with one PTY-resize IPC
+// per pixel. 60 ms (initial pick) was ~16 commits/sec which stuttered on
+// slower hardware.
+const DRAFT_COMMIT_DEBOUNCE_MS = 200;
 
 export interface SettingsModalProps {
   onClose: () => void;
@@ -173,6 +177,13 @@ const SettingsModal: Component<SettingsModalProps> = (props) => {
       committed = true;
       props.onClose();
     } catch (e) {
+      // Save bombed mid-flight (file write, validation race, etc.).
+      // Roll the live `settings` signal back to the pre-modal snapshot —
+      // otherwise the user is left with a partially-committed draft (the
+      // last debounced commit before the save attempt) reflected in the
+      // main Terminal, even though the modal is still open showing the
+      // error and any prior Save effort wasn't persisted on disk.
+      setSettings(initialSnapshot);
       setError(String(e));
     } finally {
       setSaving(false);
