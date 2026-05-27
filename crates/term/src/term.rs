@@ -139,6 +139,14 @@ impl Term {
         crate::grid::Grid::new(&self.inner, palette)
     }
 
+    /// Palette-free read of the scrollback ceiling — callers that only need
+    /// to clamp a scroll offset shouldn't have to take the palette lock just
+    /// to construct a throwaway `Grid` for one number. Mirrors
+    /// `Grid::scrollback_max`.
+    pub fn scrollback_max(&self) -> usize {
+        self.inner.screen().phys_row(0)
+    }
+
     pub fn cursor(&self) -> crate::cursor::CursorPos {
         let cp = self.inner.cursor_pos();
         let visible = matches!(cp.visibility, wezterm_surface::CursorVisibility::Visible);

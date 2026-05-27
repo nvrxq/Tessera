@@ -2,7 +2,7 @@ use anyhow::Result;
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use std::io::Read;
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
 pub struct SessionConfig {
@@ -19,10 +19,15 @@ pub struct SessionConfig {
 /// Owns the writer / resizer / killer for a PTY child. The output stream is
 /// returned separately as an `mpsc::Receiver<Vec<u8>>` from `spawn`, so the
 /// reader can be consumed without holding any lock on the session.
+///
+/// `writer` lives behind an `Arc<Mutex<...>>` so `Supervisor::write` can
+/// clone the handle out from under the sessions-map lock, drop the outer
+/// lock, and only then take the per-writer lock to do the (potentially
+/// slow) `write_all + flush`. Other sessions then write concurrently.
 pub struct PtySession {
     master: Box<dyn MasterPty + Send>,
     child_killer: Box<dyn portable_pty::ChildKiller + Send + Sync>,
-    writer: Box<dyn std::io::Write + Send>,
+    writer: Arc<Mutex<Box<dyn std::io::Write + Send>>>,
     reader_thread: Option<JoinHandle<()>>,
 }
 
@@ -77,16 +82,24 @@ impl PtySession {
             PtySession {
                 master: pair.master,
                 child_killer,
-                writer,
+                writer: Arc::new(Mutex::new(writer)),
                 reader_thread: Some(handle),
             },
             rx,
         ))
     }
 
+    /// Clone the shared writer handle. `Supervisor::write` uses this so it
+    /// can release the global sessions-map mutex BEFORE doing the actual
+    /// (potentially blocking) write+flush.
+    pub fn writer_handle(&self) -> Arc<Mutex<Box<dyn std::io::Write + Send>>> {
+        Arc::clone(&self.writer)
+    }
+
     pub fn write(&mut self, bytes: &[u8]) -> Result<()> {
-        self.writer.write_all(bytes)?;
-        self.writer.flush()?;
+        let mut w = self.writer.lock().unwrap_or_else(|e| e.into_inner());
+        w.write_all(bytes)?;
+        w.flush()?;
         Ok(())
     }
 

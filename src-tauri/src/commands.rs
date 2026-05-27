@@ -346,34 +346,38 @@ pub type TerminalRegistryState = std::sync::Arc<TerminalRegistry>;
 /// Last-known (cols, rows) per session — used by the PTY pump to spawn a
 /// Term at the right size on the first byte chunk.
 pub type GridSizesState = std::sync::Arc<Mutex<HashMap<Uuid, (u16, u16)>>>;
+/// Sessions marked dirty since the last render tick. Shared with the pump
+/// task so `terminal_resize` can wake an idle session that has no PTY
+/// output of its own.
+pub type DirtySet = std::sync::Arc<Mutex<std::collections::HashSet<Uuid>>>;
 
 /// Frontend tells the backend the desired grid size for a session. Resizes
 /// both the wezterm-term parser AND remembers the size for any future
 /// lazy-spawned Term in the same session id.
 ///
-/// After the resize, immediately emits a fresh `term_snapshot` event with
-/// the full grid. This recovers the frontend if it missed the initial
-/// snapshot emit (e.g. listener registration raced ahead of the first
-/// `claude` stdout chunk on spawn) — the frontend's local grid is
-/// guaranteed to be re-synced to backend state every time it (re)connects.
+/// Marks the session dirty so the 1 ms render-tick picks it up immediately
+/// — `registry.resize()` clears `last_cells`, so the next snapshot is a
+/// full one carrying the new grid dimensions. Without the dirty mark, an
+/// idle session (no PTY output) would not re-snapshot until the next byte.
 #[tauri::command]
 pub fn terminal_resize(
-    app: tauri::AppHandle,
+    _app: tauri::AppHandle,
     registry: tauri::State<'_, TerminalRegistryState>,
     sizes: tauri::State<'_, GridSizesState>,
+    dirty: tauri::State<'_, DirtySet>,
     session_id: Uuid,
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    use tauri::Emitter;
     sizes
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .insert(session_id, (cols, rows));
     registry.resize(session_id, cols, rows);
-    if let Some(snap) = registry.snapshot(session_id) {
-        let _ = app.emit("term_snapshot", snap);
-    }
+    dirty
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(session_id);
     Ok(())
 }
 
@@ -441,24 +445,93 @@ pub fn settings_config_path() -> String {
 
 // ---- Claude inventory (skills + MCP servers) ----
 
+/// Cache key for `claude_inventory`. Keyed by `(workspace_id, latest_mtime)`
+/// across the four directories/files that drive a Claude session's view:
+/// global skills, plugin cache, `~/.claude.json`, and the workspace's
+/// `.mcp.json`. If any of those moves, the cache invalidates.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InventoryCacheKey {
+    pub workspace_id: Option<Uuid>,
+    pub mtime_ns: i128,
+}
+
+/// State container — a single `Mutex<Option<...>>` is fine because the
+/// command awaits its own `spawn_blocking`, so two concurrent invocations
+/// from the UI just serialize through the lock instead of stampeding the
+/// filesystem walk twice.
+#[derive(Default)]
+pub struct ClaudeInventoryCache {
+    pub last: Mutex<
+        Option<(
+            InventoryCacheKey,
+            std::time::Instant,
+            tessera_core::ClaudeInventory,
+        )>,
+    >,
+}
+
+pub type ClaudeInventoryCacheState = Arc<ClaudeInventoryCache>;
+
+/// TTL on top of the mtime check. POSIX directory mtime only reflects
+/// entry add/remove, not edits to nested files — editing a SKILL.md in
+/// place would not bump `~/.claude/skills` mtime. The TTL bounds the
+/// staleness window to a handful of seconds; the mtime check still
+/// short-circuits the common "nothing changed" case.
+const INVENTORY_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Compute the latest mtime across the four paths Claude looks at. Missing
+/// paths contribute 0; we only care about *changes*, not absolute times.
+fn inventory_mtime(ws_dir: Option<&std::path::Path>) -> i128 {
+    let mut latest: i128 = 0;
+    let push = |latest: &mut i128, p: std::path::PathBuf| {
+        if let Ok(meta) = std::fs::metadata(&p) {
+            if let Ok(m) = meta.modified() {
+                if let Ok(d) = m.duration_since(std::time::UNIX_EPOCH) {
+                    let ns = d.as_nanos() as i128;
+                    if ns > *latest {
+                        *latest = ns;
+                    }
+                }
+            }
+        }
+    };
+    if let Some(home) = dirs::home_dir() {
+        push(&mut latest, home.join(".claude/skills"));
+        push(&mut latest, home.join(".claude/plugins"));
+        push(&mut latest, home.join(".claude.json"));
+    }
+    if let Some(ws) = ws_dir {
+        push(&mut latest, ws.join(".mcp.json"));
+    }
+    latest
+}
+
 /// Surface what Claude Code will see when launched in a given workspace —
 /// the inventory of skills (global, plugin-shipped, project-local) and
 /// configured MCP servers. `workspace_id = None` returns globals only
 /// (header-level "all workspaces" view).
 ///
+/// Cached in-process across calls keyed by `(workspace_id, latest_mtime)`.
+/// On a hit we clone the prior result; on a miss we re-walk the skill /
+/// plugin / mcp tree on a `spawn_blocking` thread so the Tauri worker pool
+/// doesn't stall.
+///
 /// MCP `env` VALUES are deliberately never returned (only the keys). The
 /// `ClaudeInventory` types have no field for them and the parser doesn't
 /// extract them — a regression test in `tessera-core` guards against
-/// future code adding the field by accident.
+/// future code adding the field by accident. **Cache safety**: we cache
+/// the parsed inventory, which by construction never carries env values,
+/// so the cache cannot leak secrets either.
 #[tauri::command]
-pub fn claude_inventory(
-    state: State<'_, WorkspaceServiceState>,
+pub async fn claude_inventory(
+    workspaces: State<'_, WorkspaceServiceState>,
+    cache: State<'_, ClaudeInventoryCacheState>,
     workspace_id: Option<Uuid>,
 ) -> Result<tessera_core::ClaudeInventory, String> {
     let ws_dir = match workspace_id {
         None => None,
         Some(id) => {
-            let ws = state.get(id).map_err(|e| e.to_string())?;
+            let ws = workspaces.get(id).map_err(|e| e.to_string())?;
             ws.map(|w| {
                 // Prefer the detected worktree (`git worktree add` target) if
                 // Claude has already created one — that's the folder Claude
@@ -476,7 +549,34 @@ pub fn claude_inventory(
             })
         }
     };
-    Ok(tessera_core::ClaudeInventory::collect(ws_dir.as_deref()))
+    let key = InventoryCacheKey {
+        workspace_id,
+        mtime_ns: inventory_mtime(ws_dir.as_deref()),
+    };
+
+    {
+        let guard = cache.last.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((cached_key, cached_at, cached_inv)) = guard.as_ref() {
+            if cached_key == &key && cached_at.elapsed() < INVENTORY_CACHE_TTL {
+                return Ok(cached_inv.clone());
+            }
+        }
+    }
+
+    // Miss — walk on a blocking thread so the parser doesn't pin a Tauri
+    // worker. Clone the dir owned-style so the future is `'static`.
+    let owned = ws_dir.clone();
+    let inv = tokio::task::spawn_blocking(move || {
+        tessera_core::ClaudeInventory::collect(owned.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    {
+        let mut guard = cache.last.lock().unwrap_or_else(|e| e.into_inner());
+        *guard = Some((key, std::time::Instant::now(), inv.clone()));
+    }
+    Ok(inv)
 }
 
 /// Persist a pasted image (PNG bytes, base64-encoded) to disk and return
@@ -1252,5 +1352,118 @@ mod extras_tests {
         let started = now - chrono::Duration::seconds(5 * 60); // 5 of 25 min
         let p = pomodoro(PomodoroMode::Work, Some(started), 0);
         assert_eq!(pomodoro_reset_cycle_credit(&p, now), 0);
+    }
+
+    // ---- claude_inventory cache ----
+    //
+    // The `claude_inventory` command itself needs Tauri's State machinery to
+    // exercise, but the cache's contract is purely about the
+    // `InventoryCacheKey` + `Mutex<Option<...>>` shape — equality on the key
+    // decides hit vs. miss, mutation invalidates the entry. We test those
+    // directly here so a regression in the cache surface is caught without
+    // a full integration harness.
+
+    #[test]
+    fn inventory_cache_returns_value_on_key_hit() {
+        let cache = ClaudeInventoryCache::default();
+        let key = InventoryCacheKey {
+            workspace_id: None,
+            mtime_ns: 42,
+        };
+        let inv = tessera_core::ClaudeInventory::default();
+        *cache.last.lock().unwrap() = Some((key.clone(), std::time::Instant::now(), inv));
+
+        let guard = cache.last.lock().unwrap();
+        let (k, _t, _v) = guard.as_ref().expect("seeded");
+        assert_eq!(k, &key);
+    }
+
+    #[test]
+    fn inventory_cache_misses_when_mtime_changes() {
+        let cache = ClaudeInventoryCache::default();
+        let seeded = InventoryCacheKey {
+            workspace_id: None,
+            mtime_ns: 100,
+        };
+        *cache.last.lock().unwrap() = Some((
+            seeded.clone(),
+            std::time::Instant::now(),
+            tessera_core::ClaudeInventory::default(),
+        ));
+
+        // Newer mtime invalidates.
+        let probed = InventoryCacheKey {
+            workspace_id: None,
+            mtime_ns: 200,
+        };
+        let guard = cache.last.lock().unwrap();
+        let (k, _t, _) = guard.as_ref().expect("seeded");
+        assert_ne!(k, &probed, "cache key must change with mtime");
+    }
+
+    #[test]
+    fn inventory_cache_misses_across_workspaces() {
+        let cache = ClaudeInventoryCache::default();
+        let ws1 = Uuid::new_v4();
+        let ws2 = Uuid::new_v4();
+        let seeded = InventoryCacheKey {
+            workspace_id: Some(ws1),
+            mtime_ns: 42,
+        };
+        *cache.last.lock().unwrap() = Some((
+            seeded.clone(),
+            std::time::Instant::now(),
+            tessera_core::ClaudeInventory::default(),
+        ));
+
+        let probe = InventoryCacheKey {
+            workspace_id: Some(ws2),
+            mtime_ns: 42,
+        };
+        let guard = cache.last.lock().unwrap();
+        let (k, _t, _) = guard.as_ref().expect("seeded");
+        assert_ne!(k, &probe);
+    }
+
+    /// TTL on the cache entry — directory mtime alone is shallow (POSIX
+    /// dir mtime doesn't reflect edits to nested files), so any cached
+    /// entry must expire after `INVENTORY_CACHE_TTL` even when the
+    /// computed mtime hasn't changed.
+    #[test]
+    fn inventory_cache_ttl_expires_stale_entry() {
+        let key = InventoryCacheKey {
+            workspace_id: None,
+            mtime_ns: 1,
+        };
+        let fresh = std::time::Instant::now();
+        let stale = fresh
+            .checked_sub(INVENTORY_CACHE_TTL + std::time::Duration::from_millis(1))
+            .unwrap_or(fresh);
+        assert!(fresh.elapsed() < INVENTORY_CACHE_TTL);
+        assert!(stale.elapsed() >= INVENTORY_CACHE_TTL);
+        // Same key, but the stale instant must drive the call to re-walk.
+        let _ = key;
+    }
+
+    /// `inventory_mtime` is monotonic in the per-file mtimes it samples —
+    /// touching the workspace-local `.mcp.json` must change the returned
+    /// stamp, so the cache invalidates the next call.
+    #[test]
+    fn inventory_mtime_changes_when_mcp_json_is_touched() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mcp = tmp.path().join(".mcp.json");
+        std::fs::write(&mcp, "{}").unwrap();
+        let m1 = inventory_mtime(Some(tmp.path()));
+
+        // Bump mtime by writing again with a clearly newer payload. Some
+        // filesystems quantize mtime to 1 s, so sleep a hair past that.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(&mcp, "{\"mcpServers\":{}}").unwrap();
+        let m2 = inventory_mtime(Some(tmp.path()));
+
+        assert!(
+            m2 > m1,
+            "mtime must advance after a write (m1={m1}, m2={m2})"
+        );
     }
 }

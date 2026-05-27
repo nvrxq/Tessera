@@ -23,12 +23,16 @@ pub fn run() {
         .with_target(false)
         .init();
 
-    inherit_shell_path();
-
     let data_dir = dirs::data_local_dir()
         .expect("no XDG data dir")
         .join("tessera");
     std::fs::create_dir_all(&data_dir).expect("could not create data dir");
+
+    // Reordered to come AFTER data_dir creation so the PATH cache has a
+    // place to live. Runs entirely before any Tauri thread spins up — the
+    // cache-hit branch mutates env synchronously, the cache-miss branch
+    // probes synchronously with a 500 ms timeout (cap on cold-start tax).
+    inherit_shell_path(&data_dir);
     let db_path = data_dir.join("state.db");
     let conn = tessera_store::open(&db_path).expect("could not open store");
     let db = Arc::new(Mutex::new(conn));
@@ -44,6 +48,12 @@ pub fn run() {
 
     let registry: Arc<TerminalRegistry> = Arc::new(TerminalRegistry::new());
     let grid_sizes: GridSizes = Arc::new(Mutex::new(std::collections::HashMap::new()));
+    let inventory_cache: commands::ClaudeInventoryCacheState =
+        Arc::new(commands::ClaudeInventoryCache::default());
+    // Shared between the pump task and `terminal_resize`. Resize MUST be
+    // able to mark a session dirty so an idle session (no PTY output)
+    // still re-snapshots after a window resize.
+    let dirty: commands::DirtySet = Arc::new(Mutex::new(std::collections::HashSet::new()));
 
     // Apply persisted user settings to the registry's live palette so the
     // first snapshot already paints with the user's customised colours.
@@ -66,6 +76,8 @@ pub fn run() {
         .manage(workspace_service.clone())
         .manage(registry.clone())
         .manage(grid_sizes.clone())
+        .manage(inventory_cache.clone())
+        .manage(dirty.clone())
         .manage::<commands::DbState>(db.clone())
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -91,8 +103,6 @@ pub fn run() {
             // Per-byte latency budget on the backend side: ≤2 ms wait for
             // the next tick + ~50 µs snapshot + ~100 µs JSON emit = ~2.2 ms.
             // Frontend then has ~16 ms display-refresh floor.
-            let dirty: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<uuid::Uuid>>> =
-                std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
             let pty_seen_at: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<uuid::Uuid, std::time::Instant>>> =
                 std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
             let bench_enabled = std::env::var("TESSERA_BENCH").is_ok();
@@ -277,38 +287,200 @@ pub fn run() {
 /// capture the PATH it would export, and overwrite our own. Subsequent
 /// `Command::spawn` calls inherit the updated PATH automatically.
 ///
-/// Silent on failure so a misconfigured shell doesn't break startup.
-/// Must be called BEFORE the Tauri runtime spins up threads — set_var on
-/// the global env is only sound in a single-threaded prelude.
-fn inherit_shell_path() {
+/// Two-tier caching policy:
+///   1. On startup we read a cached PATH from `<data_dir>/path_cache.json`
+///      keyed by `($SHELL, mtime(shell binary))`. Cache hit → apply the
+///      cached PATH synchronously, skip the shell probe entirely. This is
+///      the cold-start win (50-300 ms on macOS).
+///   2. Cache miss → spawn the shell probe in a background thread so the
+///      Tauri builder isn't blocked. When it returns, we apply the new PATH
+///      (subsequent PTY spawns pick it up) AND persist it to the cache for
+///      the next launch.
+///
+/// The "main process keeps the old PATH for the first second" trade is fine
+/// — Tessera doesn't launch any PATH-sensitive children during that window.
+///
+/// SAFETY: `std::env::set_var` is `unsafe` in the 2024 edition because env
+/// mutation isn't atomic. We only mutate PATH in the synchronous startup
+/// prelude, BEFORE the Tauri builder starts spawning runtime threads. The
+/// cold-cache probe is bounded by `PATH_PROBE_TIMEOUT` so the worst-case
+/// cold-start tax is capped; subsequent launches hit the cache and skip
+/// the probe entirely.
+fn inherit_shell_path(data_dir: &std::path::Path) {
     let Ok(shell) = std::env::var("SHELL") else {
         return;
     };
-    // `-l -c` reads ~/.zprofile / ~/.bash_profile (login shells) which is
-    // where PATH is conventionally set on macOS. Avoid `-i` because some
-    // shells refuse it without a controlling TTY.
-    let Ok(out) = std::process::Command::new(&shell)
-        .args(["-l", "-c", "printf %s \"$PATH\""])
-        .output()
-    else {
-        return;
-    };
-    if !out.status.success() {
-        return;
-    }
-    let probed = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if probed.is_empty() {
+
+    let cache_path = data_dir.join("path_cache.json");
+    let key = path_cache::cache_key(&shell);
+
+    // Tier 1: warm cache hit — instant.
+    if let Some(cached) = path_cache::load(&cache_path, &key) {
+        let current = std::env::var("PATH").unwrap_or_default();
+        if cached != current {
+            // SAFETY: called before any other thread is spawned.
+            unsafe { std::env::set_var("PATH", &cached) };
+        }
+        tracing::info!(path = %cached, "inherited interactive shell PATH (cache hit)");
         return;
     }
-    let current = std::env::var("PATH").unwrap_or_default();
-    if probed == current {
-        return;
+
+    // Tier 2: cold cache — probe synchronously with a tight timeout. The
+    // probe was previously fired on a background thread for "zero-wait"
+    // startup, but that races `setenv` against `getenv` in any subsequent
+    // PTY spawn (UB under the 2024 edition / TSan). We pay up to
+    // `PATH_PROBE_TIMEOUT` once per cache key, and never again.
+    const PATH_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+    if let Some(probed) = path_cache::probe_shell_with_timeout(&shell, PATH_PROBE_TIMEOUT) {
+        let current = std::env::var("PATH").unwrap_or_default();
+        if probed != current {
+            // SAFETY: synchronous startup prelude — no other threads yet.
+            unsafe { std::env::set_var("PATH", &probed) };
+        }
+        let _ = path_cache::save(&cache_path, &key, &probed);
+        tracing::info!(path = %probed, "inherited interactive shell PATH (sync probe)");
     }
-    // SAFETY: called before any other thread is spawned.
-    unsafe {
-        std::env::set_var("PATH", &probed);
+}
+
+/// PATH cache helpers — pulled into a module so `cache_key` and `probe_shell`
+/// can be unit-tested without touching the global env.
+mod path_cache {
+    use serde::{Deserialize, Serialize};
+    use std::path::Path;
+
+    /// Cache identity: shell binary + its mtime as nanos-since-epoch. If
+    /// either changes we treat the cache as cold. mtime survives reboots,
+    /// rsync, and brew upgrades without us having to invent a stamp file.
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct Key {
+        pub shell: String,
+        pub mtime_ns: i128,
     }
-    tracing::info!(path = %probed, "inherited interactive shell PATH");
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    struct Entry {
+        key: Key,
+        path: String,
+    }
+
+    pub fn cache_key(shell: &str) -> Key {
+        let mtime_ns = std::fs::metadata(shell)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_nanos() as i128)
+            .unwrap_or(0);
+        Key {
+            shell: shell.to_string(),
+            mtime_ns,
+        }
+    }
+
+    pub fn load(cache_path: &Path, key: &Key) -> Option<String> {
+        let raw = std::fs::read_to_string(cache_path).ok()?;
+        let entry: Entry = serde_json::from_str(&raw).ok()?;
+        if &entry.key != key {
+            return None;
+        }
+        if entry.path.is_empty() {
+            return None;
+        }
+        Some(entry.path)
+    }
+
+    pub fn save(cache_path: &Path, key: &Key, path: &str) -> std::io::Result<()> {
+        if let Some(parent) = cache_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let entry = Entry {
+            key: key.clone(),
+            path: path.to_string(),
+        };
+        let json = serde_json::to_string(&entry).map_err(std::io::Error::other)?;
+        std::fs::write(cache_path, json)
+    }
+
+    /// Probe the shell with a hard timeout. Spawns the child, polls
+    /// `try_wait`, kills on timeout. Used at cold-start so a wedged login
+    /// shell can't stall Tessera indefinitely.
+    pub fn probe_shell_with_timeout(shell: &str, timeout: std::time::Duration) -> Option<String> {
+        use std::io::Read;
+        use std::process::{Command, Stdio};
+        let mut child = Command::new(shell)
+            .args(["-l", "-c", "printf %s \"$PATH\""])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()?;
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            match child.try_wait().ok()? {
+                Some(status) => {
+                    if !status.success() {
+                        return None;
+                    }
+                    let mut out = String::new();
+                    child.stdout.take()?.read_to_string(&mut out).ok()?;
+                    let probed = out.trim().to_string();
+                    return if probed.is_empty() {
+                        None
+                    } else {
+                        Some(probed)
+                    };
+                }
+                None => {
+                    if std::time::Instant::now() >= deadline {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return None;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn cache_round_trips_and_invalidates_on_key_change() {
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join("path_cache.json");
+            let k1 = Key {
+                shell: "/bin/zsh".into(),
+                mtime_ns: 42,
+            };
+            save(&path, &k1, "/usr/local/bin:/usr/bin").unwrap();
+            assert_eq!(load(&path, &k1).as_deref(), Some("/usr/local/bin:/usr/bin"));
+
+            // Different mtime → miss.
+            let k2 = Key {
+                shell: "/bin/zsh".into(),
+                mtime_ns: 99,
+            };
+            assert!(load(&path, &k2).is_none());
+
+            // Different shell → miss.
+            let k3 = Key {
+                shell: "/bin/bash".into(),
+                mtime_ns: 42,
+            };
+            assert!(load(&path, &k3).is_none());
+        }
+
+        #[test]
+        fn load_returns_none_when_file_missing() {
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join("missing.json");
+            let k = Key {
+                shell: "/x".into(),
+                mtime_ns: 0,
+            };
+            assert!(load(&path, &k).is_none());
+        }
+    }
 }
 
 fn dispatch_hook(app: &AppHandle, svc: &Arc<WorkspaceService>, evt: HookEvent) {

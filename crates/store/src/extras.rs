@@ -30,7 +30,7 @@ pub fn insert_link(conn: &Connection, link: &WorkspaceLink) -> Result<()> {
 }
 
 pub fn list_links(conn: &Connection, workspace_id: Uuid) -> Result<Vec<WorkspaceLink>> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT id, workspace_id, label, url, kind, created_at, sort_order \
          FROM workspace_links WHERE workspace_id = ?1 \
          ORDER BY sort_order ASC, created_at ASC",
@@ -125,7 +125,7 @@ pub fn list_tasks(
          FROM workspace_tasks WHERE workspace_id = ?1 AND done = 0 \
          ORDER BY sort_order ASC, created_at ASC"
     };
-    let mut stmt = conn.prepare(sql)?;
+    let mut stmt = conn.prepare_cached(sql)?;
     let rows = stmt.query_map(params![workspace_id.to_string()], row_to_task)?;
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
 }
@@ -217,15 +217,14 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkspaceTask> {
 /// `Ok(None)` so the caller can synthesise an `idle` state without
 /// committing it to disk yet.
 pub fn get_pomodoro(conn: &Connection, workspace_id: Uuid) -> Result<Option<PomodoroState>> {
-    conn.query_row(
+    let mut stmt = conn.prepare_cached(
         "SELECT workspace_id, mode, started_at, paused_at, target_seconds, \
                 elapsed_seconds_before_pause, cycles_completed, updated_at \
          FROM workspace_pomodoro WHERE workspace_id = ?1",
-        params![workspace_id.to_string()],
-        row_to_pomodoro,
-    )
-    .optional()
-    .map_err(Into::into)
+    )?;
+    stmt.query_row(params![workspace_id.to_string()], row_to_pomodoro)
+        .optional()
+        .map_err(Into::into)
 }
 
 /// UPSERT the pomodoro row. We always write a full row so transient frontend
@@ -295,14 +294,13 @@ fn row_to_pomodoro(row: &rusqlite::Row<'_>) -> rusqlite::Result<PomodoroState> {
 /// synthesise an idle state rather than erroring — the next upsert will
 /// re-insert it.
 pub fn get_app_pomodoro(conn: &Connection) -> Result<PomodoroState> {
-    let s = conn
-        .query_row(
-            "SELECT mode, started_at, paused_at, target_seconds, \
-                    elapsed_seconds_before_pause, cycles_completed, updated_at \
-             FROM app_pomodoro WHERE id = 1",
-            [],
-            row_to_app_pomodoro,
-        )
+    let mut stmt = conn.prepare_cached(
+        "SELECT mode, started_at, paused_at, target_seconds, \
+                elapsed_seconds_before_pause, cycles_completed, updated_at \
+         FROM app_pomodoro WHERE id = 1",
+    )?;
+    let s = stmt
+        .query_row([], row_to_app_pomodoro)
         .optional()?
         .unwrap_or_else(|| PomodoroState::idle(uuid::Uuid::nil()));
     Ok(s)
