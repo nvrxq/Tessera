@@ -36,12 +36,24 @@ impl<'a> Grid<'a> {
     ///   `CellRef::as_cell()` to obtain an owned `Cell`, then pass `&cell`
     ///   to `GridCell::from_wez`.
     pub fn rows_iter<'b>(&'b self) -> impl Iterator<Item = Vec<GridCell>> + 'b {
+        self.rows_iter_with_offset(0)
+    }
+
+    /// Like `rows_iter` but `offset_back` rows up into the scrollback
+    /// history (0 = live viewport, larger = further back). Saturates at
+    /// the top of the scrollback buffer — callers can pass a delta from
+    /// the frontend without bounds-checking it. `scrollback_max()` reports
+    /// how far up they can go.
+    pub fn rows_iter_with_offset<'b>(
+        &'b self,
+        offset_back: usize,
+    ) -> impl Iterator<Item = Vec<GridCell>> + 'b {
         let screen = self.term.screen();
         let cols = screen.physical_cols;
         let rows = screen.physical_rows;
         let palette = self.palette;
-        // lines_in_phys_range is unconditionally pub; visible_lines() is cfg(test).
-        let start = screen.phys_row(0);
+        let top = screen.phys_row(0);
+        let start = top.saturating_sub(offset_back);
         screen
             .lines_in_phys_range(start..start + rows)
             .into_iter()
@@ -65,6 +77,12 @@ impl<'a> Grid<'a> {
                 row.truncate(cols);
                 row
             })
+    }
+
+    /// Maximum allowed `offset_back` — equals the number of physical rows
+    /// of scrollback above the current viewport top.
+    pub fn scrollback_max(&self) -> usize {
+        self.term.screen().phys_row(0)
     }
 
     /// Convenience: collect the full grid into `Vec<Vec<GridCell>>`. Allocates;

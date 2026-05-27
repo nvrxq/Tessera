@@ -47,6 +47,11 @@ struct SessionState {
     last_cells: Vec<WireCell>,
     last_cols: u16,
     last_rows: u16,
+    /// How many rows up into scrollback we're rendering. 0 = live tail.
+    /// Reset to 0 the moment new PTY bytes arrive (`feed`) so the live
+    /// stream "snaps back" to current — that's how iTerm/Wezterm behave
+    /// and avoids the "wait, I'm reading stale output" trap.
+    scroll_offset: usize,
 }
 
 pub struct TerminalRegistry {
@@ -78,8 +83,14 @@ impl TerminalRegistry {
             last_cells: Vec::new(),
             last_cols: cols,
             last_rows: rows,
+            scroll_offset: 0,
         });
         st.term.feed(bytes);
+        // Snap back to live tail on every new chunk — see SessionState.
+        if st.scroll_offset != 0 {
+            st.scroll_offset = 0;
+            st.last_cells.clear();
+        }
         true
     }
 
@@ -106,6 +117,27 @@ impl TerminalRegistry {
             .remove(&sid);
     }
 
+    /// Adjust the scrollback view by `delta_back` rows. Positive = move
+    /// further back into history, negative = move toward the live tail.
+    /// Clamped to `[0, scrollback_max]`. Clearing `last_cells` forces the
+    /// next snapshot to be `full`, which is correct because the entire
+    /// grid content shifts with scroll. Returns the resulting offset; the
+    /// caller should re-emit a snapshot to repaint.
+    pub fn set_scroll_delta(&self, sid: Uuid, delta_back: i32) -> usize {
+        let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(st) = map.get_mut(&sid) else {
+            return 0;
+        };
+        let max = st.term.grid(&self.palette).scrollback_max();
+        let want = (st.scroll_offset as i64) + delta_back as i64;
+        let clamped = want.clamp(0, max as i64) as usize;
+        if clamped != st.scroll_offset {
+            st.scroll_offset = clamped;
+            st.last_cells.clear();
+        }
+        clamped
+    }
+
     /// Snapshot the current grid. Returns a delta against the previous
     /// snapshot when sizes match; otherwise a full grid. Updates the
     /// stored last-sent buffer in either case.
@@ -117,11 +149,14 @@ impl TerminalRegistry {
         let total = (cols as usize) * (rows as usize);
         let cur = st.term.cursor();
 
-        // Build the current flat cell buffer.
+        // Build the current flat cell buffer. When `scroll_offset > 0` we
+        // sample N rows back into the scrollback buffer; otherwise it's
+        // the live viewport.
+        let scroll_offset = st.scroll_offset;
         let mut current: Vec<WireCell> = Vec::with_capacity(total);
         {
             let grid = st.term.grid(&self.palette);
-            for row in grid.rows_iter() {
+            for row in grid.rows_iter_with_offset(scroll_offset) {
                 for cell in &row {
                     current.push(wire_cell(cell));
                 }
@@ -151,7 +186,7 @@ impl TerminalRegistry {
                 positions: Vec::new(),
                 cursor_col: cur.col,
                 cursor_row: cur.row,
-                cursor_visible: cur.visible,
+                cursor_visible: cur.visible && scroll_offset == 0,
                 cursor_shape: cursor_shape(&cur.shape),
             }
         } else {
@@ -176,7 +211,7 @@ impl TerminalRegistry {
                 positions,
                 cursor_col: cur.col,
                 cursor_row: cur.row,
-                cursor_visible: cur.visible,
+                cursor_visible: cur.visible && scroll_offset == 0,
                 cursor_shape: cursor_shape(&cur.shape),
             }
         };

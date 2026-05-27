@@ -378,6 +378,26 @@ pub fn terminal_resize(
     Ok(())
 }
 
+/// Move the terminal's scroll view. Positive `delta_back` scrolls into
+/// history; negative pulls back toward the live tail. Resulting offset is
+/// clamped to the scrollback buffer's size. Re-emits a fresh `term_snapshot`
+/// so the frontend repaints the new view immediately. Any subsequent PTY
+/// data automatically resets the offset to 0 (live tail) inside `feed`.
+#[tauri::command]
+pub fn terminal_scroll(
+    app: tauri::AppHandle,
+    registry: tauri::State<'_, TerminalRegistryState>,
+    session_id: Uuid,
+    delta_back: i32,
+) -> Result<usize, String> {
+    use tauri::Emitter;
+    let new_offset = registry.set_scroll_delta(session_id, delta_back);
+    if let Some(snap) = registry.snapshot(session_id) {
+        let _ = app.emit("term_snapshot", snap);
+    }
+    Ok(new_offset)
+}
+
 /// Persist a pasted image (PNG bytes, base64-encoded) to disk and return
 /// the absolute path. Frontend pastes flow: clipboard → readImage → encode
 /// PNG via canvas.toDataURL → this command → write returned path into the

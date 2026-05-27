@@ -856,6 +856,39 @@ export default function Terminal(props: TerminalProps) {
     }
   });
 
+  // ── Mouse wheel / trackpad → terminal scrollback ──
+  // The previous Up/Down-arrow translation was wrong: in Claude Code's TUI,
+  // Up/Down navigates the user's prompt history, not the chat-history view.
+  // Real terminal scrollback is OUR responsibility — wezterm-term parses
+  // and stores it on the backend, and `terminal_scroll` repositions our
+  // sampling window over that buffer.
+  //
+  // Trackpad on macOS emits many small-delta events per gesture; we
+  // accumulate pixel deltas and flush whole-line increments. Browsers
+  // sometimes report `deltaMode` in lines or pages, so normalise first.
+  const LINE_PIXELS = 20;
+  let wheelAccum = 0;
+  const onWheel = (ev: WheelEvent) => {
+    const sid = activeSessionId;
+    if (!sid) return;
+    ev.preventDefault();
+    let delta = ev.deltaY;
+    if (ev.deltaMode === 1) delta *= LINE_PIXELS;       // lines
+    else if (ev.deltaMode === 2) delta *= LINE_PIXELS * 10; // pages
+    wheelAccum += delta;
+    const lines = Math.trunc(wheelAccum / LINE_PIXELS);
+    if (lines === 0) return;
+    wheelAccum -= lines * LINE_PIXELS;
+    // deltaY > 0 means content scrolls UP (= view moves DOWN) — i.e. we
+    // want to move toward the live tail, which is `delta_back < 0`.
+    // Conventional wheel-up gives deltaY < 0 → `delta_back > 0` (further
+    // back into history). Hence the sign flip.
+    void invoke("terminal_scroll", {
+      sessionId: sid,
+      deltaBack: -lines,
+    }).catch((e) => console.warn("terminal_scroll failed", e));
+  };
+
   // ── Pointer-driven text selection ──
   const onPointerDown = (ev: PointerEvent) => {
     if (ev.button !== 0) return; // left button only
@@ -905,6 +938,7 @@ export default function Terminal(props: TerminalProps) {
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
+        onWheel={onWheel}
       />
       <div
         class="terminal-loading"

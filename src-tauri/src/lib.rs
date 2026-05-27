@@ -220,6 +220,7 @@ pub fn run() {
             commands::terminal_resize,
             commands::list_directories,
             commands::save_paste_image,
+            commands::terminal_scroll,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
