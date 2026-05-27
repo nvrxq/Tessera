@@ -50,21 +50,26 @@ const ClaudeInventoryModal: Component<ClaudeInventoryModalProps> = (props) => {
   const servers = createMemo<McpServer[]>(() => inv()?.mcp_servers ?? []);
 
   // Escape closes — bind on the document so the modal works regardless of
-  // where focus landed. Pattern lifted from SettingsModal.
+  // where focus landed. Bubble phase + no stopPropagation: matches
+  // SettingsModal and avoids swallowing Escape from sibling overlays or
+  // terminal keybindings when this modal isn't the topmost concern.
   const onDocKey = (e: KeyboardEvent) => {
     if (e.key === "Escape") {
-      e.stopPropagation();
       props.onClose();
     }
   };
-  onMount(() => document.addEventListener("keydown", onDocKey, true));
-  onCleanup(() => document.removeEventListener("keydown", onDocKey, true));
+  onMount(() => document.addEventListener("keydown", onDocKey));
+  onCleanup(() => document.removeEventListener("keydown", onDocKey));
 
-  // When the active tab gets emptied (workspace switch or refresh wipes a
-  // section), fall back to the other one so users aren't staring at "0".
+  // Auto-flip from an empty Skills tab to MCP — but only once per mount,
+  // so a fresh-machine user (zero skills) who clicks back to Skills
+  // doesn't get bounced to MCP again on the next refresh.
+  let autoSwitched = false;
   createEffect(() => {
     if (inv.loading) return;
+    if (autoSwitched) return;
     if (tab() === "skills" && skills().length === 0 && servers().length > 0) {
+      autoSwitched = true;
       setTab("mcp");
     }
   });
@@ -145,18 +150,29 @@ const ClaudeInventoryModal: Component<ClaudeInventoryModalProps> = (props) => {
           </nav>
           <div class="inventory-pane">
             <Show when={!inv.loading} fallback={<LoadingState />}>
-              <Show when={tab() === "skills"}>
-                <Show when={skills().length > 0} fallback={<EmptySkills />}>
-                  <ul class="inventory-list">
-                    <For each={skills()}>{(s) => <SkillCard skill={s} />}</For>
-                  </ul>
+              <Show
+                when={!inv.error}
+                fallback={
+                  <ErrorState
+                    message={String(inv.error)}
+                    onRetry={() => refetch()}
+                    busy={inv.loading}
+                  />
+                }
+              >
+                <Show when={tab() === "skills"}>
+                  <Show when={skills().length > 0} fallback={<EmptySkills />}>
+                    <ul class="inventory-list">
+                      <For each={skills()}>{(s) => <SkillCard skill={s} />}</For>
+                    </ul>
+                  </Show>
                 </Show>
-              </Show>
-              <Show when={tab() === "mcp"}>
-                <Show when={servers().length > 0} fallback={<EmptyMcp />}>
-                  <ul class="inventory-list">
-                    <For each={servers()}>{(m) => <McpCard server={m} />}</For>
-                  </ul>
+                <Show when={tab() === "mcp"}>
+                  <Show when={servers().length > 0} fallback={<EmptyMcp />}>
+                    <ul class="inventory-list">
+                      <For each={servers()}>{(m) => <McpCard server={m} />}</For>
+                    </ul>
+                  </Show>
                 </Show>
               </Show>
             </Show>
@@ -334,6 +350,26 @@ const EmptySkills: Component = () => (
 );
 const EmptyMcp: Component = () => (
   <EmptyState message="No MCP servers configured in ~/.claude.json or this workspace's .mcp.json." />
+);
+
+interface ErrorStateProps {
+  message: string;
+  onRetry: () => void;
+  busy: boolean;
+}
+const ErrorState: Component<ErrorStateProps> = (props) => (
+  <section class="inventory-error">
+    <p class="inventory-error-title">Couldn't load inventory.</p>
+    <p class="inventory-error-message">{props.message}</p>
+    <button
+      type="button"
+      class="inventory-error-retry"
+      onClick={props.onRetry}
+      disabled={props.busy}
+    >
+      Retry
+    </button>
+  </section>
 );
 
 export default ClaudeInventoryModal;
