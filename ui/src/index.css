@@ -958,6 +958,7 @@ body {
 
 /* status dots */
 .status-dot {
+  position: relative; /* anchor for the ::after halo */
   flex-shrink: 0;
   width: 8px;
   height: 8px;
@@ -967,25 +968,52 @@ body {
   box-shadow: 0 0 0 1px var(--surface-elevated) inset;
   transition: background var(--t-medium) var(--ease-out), box-shadow var(--t-medium) var(--ease-out);
 }
+/* Halo lives on a pseudo-element so the breathing animation only
+ * touches transform + opacity on a separately-composited layer — those
+ * are GPU-compositor friendly and skip the paint thread. Per DESIGN.md
+ * the halo grows from 0 to 8px and back ("box-shadow: 0 → 8px → 0"),
+ * which we approximate by holding box-shadow constant and animating
+ * scale(0 → 1 → 0) + opacity(0 → 1 → 0). The visible dot stays 8px. */
+.status-dot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  transform: scale(0);
+  will-change: transform, opacity;
+}
 .status-none { background: var(--idle); opacity: 0.5; }
 .status-idle { background: var(--idle); }
 .status-working {
   background: var(--working);
-  box-shadow: 0 0 10px rgba(91, 141, 239, 0.65);
   animation: dot-breathe 1.6s ease-in-out infinite;
+}
+.status-working::after {
+  box-shadow: 0 0 10px rgba(91, 141, 239, 0.65);
+  animation: dot-halo 1.6s ease-in-out infinite;
 }
 .status-needs_input {
   background: var(--needs-input);
+}
+.status-needs_input::after {
   box-shadow: 0 0 10px rgba(230, 200, 76, 0.65);
-  animation: dot-attention 2.2s ease-in-out infinite;
+  animation: dot-halo 2.2s ease-in-out infinite;
 }
 .status-done {
   background: var(--success);
+}
+.status-done::after {
   box-shadow: 0 0 8px rgba(127, 189, 127, 0.35);
+  opacity: 1;
 }
 .status-crashed {
   background: var(--crashed);
+}
+.status-crashed::after {
   box-shadow: 0 0 8px rgba(217, 102, 102, 0.4);
+  opacity: 1;
 }
 
 /* —— sidebar "new" circular button (editorial, like the reference) —— */
@@ -1540,13 +1568,16 @@ button[type="submit"]:hover:not(:disabled) {
   0% { opacity: 0; transform: scaleY(0.4); }
   100% { opacity: 1; transform: scaleY(1); }
 }
+/* Dot itself dims per DESIGN.md: opacity 1 → 0.55 → 1. */
 @keyframes dot-breathe {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.55; transform: scale(0.9); }
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
 }
-@keyframes dot-attention {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.18); }
+/* Halo grows from a centred point to its full extent and back.
+ * Synced to the working dot's 1.6s; reused at 2.2s for needs-input. */
+@keyframes dot-halo {
+  0%, 100% { opacity: 0; transform: scale(0); }
+  50%      { opacity: 1; transform: scale(1); }
 }
 @keyframes pane-fade-in {
   0% { opacity: 0; transform: translateY(8px); }

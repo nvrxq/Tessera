@@ -1,4 +1,5 @@
 import {
+  createEffect,
   createSignal,
   For,
   onCleanup,
@@ -19,6 +20,18 @@ import {
   type UserConfig,
 } from "./lib/settings";
 import SettingsPreview from "./SettingsPreview";
+
+/** Debounce window (ms) for committing draft edits to the global
+ *  `settings` signal. The main Terminal subscribes to that signal and a
+ *  font change kicks off a backend resize round-trip; 60ms lets the
+ *  user drag a slider smoothly while coalescing per-pixel updates into
+ *  ~one IPC every refresh frame. The SettingsPreview reads the draft
+ *  directly (no debounce) so the in-modal preview stays snappy. */
+// 200 ms ≈ 5 commits/sec during a fast slider drag — still feels live in
+// the preview, but doesn't flood the Rust side with one PTY-resize IPC
+// per pixel. 60 ms (initial pick) was ~16 commits/sec which stuttered on
+// slower hardware.
+const DRAFT_COMMIT_DEBOUNCE_MS = 200;
 
 export interface SettingsModalProps {
   onClose: () => void;
@@ -62,8 +75,52 @@ const SettingsModal: Component<SettingsModalProps> = (props) => {
   const [error, setError] = createSignal<string | null>(null);
   const [configPath, setConfigPath] = createSignal<string>("");
 
+  // Snapshot the persisted settings on open so a Cancel can restore
+  // them — the debounced live-commit below mutates the global signal
+  // while the user edits, which is fine for previewing in the main
+  // Terminal but would leak unsaved drafts if the user backs out.
+  const initialSnapshot = cloneConfig(settings());
+  let committed = false;
+
   onMount(() => {
     void settingsConfigPath().then(setConfigPath).catch(() => {});
+  });
+
+  // Debounced mirror: draft → global `settings`. The main Terminal
+  // listens to `settings()` and a font / size change triggers a
+  // backend resize round-trip, so we coalesce slider drags into ~one
+  // commit per 60 ms instead of one per pixel. SettingsPreview reads
+  // `draft` directly (no debounce) so the in-modal preview stays
+  // pixel-perfect during drag.
+  let commitTimer: number | null = null;
+  let firstRun = true;
+  createEffect(() => {
+    const d = draft();
+    if (firstRun) {
+      // Skip the initial run — `draft` starts equal to the live
+      // settings, so committing on first effect would be a no-op
+      // that still cleared the timer prematurely.
+      firstRun = false;
+      return;
+    }
+    if (commitTimer != null) window.clearTimeout(commitTimer);
+    commitTimer = window.setTimeout(() => {
+      commitTimer = null;
+      setSettings(d);
+    }, DRAFT_COMMIT_DEBOUNCE_MS);
+  });
+  const flushPendingCommit = () => {
+    if (commitTimer != null) {
+      window.clearTimeout(commitTimer);
+      commitTimer = null;
+    }
+  };
+  onCleanup(() => {
+    flushPendingCommit();
+    // If the modal is torn down without Save being clicked, revert any
+    // debounced live-preview edits so the user's "cancel" intent is
+    // honoured and the persisted config remains the source of truth.
+    if (!committed) setSettings(initialSnapshot);
   });
 
   function cloneConfig(c: UserConfig): UserConfig {
@@ -106,14 +163,27 @@ const SettingsModal: Component<SettingsModalProps> = (props) => {
           throw new Error(`ANSI slot ${i} is not a valid #RRGGBB hex colour.`);
         }
       }
+      // Pre-empt the in-flight debounced commit so it can't fire
+      // *after* save with a stale draft snapshot.
+      flushPendingCommit();
       await saveSettings(cfg);
       // Mirror the saved state into the live signal immediately — the
       // settings_changed event will also fire and is a safety net, but
       // updating synchronously here avoids a one-frame flash where the
       // modal closes before the event round-trips.
       setSettings(cfg);
+      // Mark as committed so onCleanup doesn't roll back to the
+      // pre-modal snapshot now that the draft is persisted.
+      committed = true;
       props.onClose();
     } catch (e) {
+      // Save bombed mid-flight (file write, validation race, etc.).
+      // Roll the live `settings` signal back to the pre-modal snapshot —
+      // otherwise the user is left with a partially-committed draft (the
+      // last debounced commit before the save attempt) reflected in the
+      // main Terminal, even though the modal is still open showing the
+      // error and any prior Save effort wasn't persisted on disk.
+      setSettings(initialSnapshot);
       setError(String(e));
     } finally {
       setSaving(false);

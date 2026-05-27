@@ -226,6 +226,23 @@ const App: Component = () => {
       console.warn("settings_load failed; using defaults", e);
     }
     unlistenSettings = await onSettingsChanged((cfg) => setSettings(cfg));
+    // Idle-prefetch the lazy modal chunks. By the time the user first
+    // clicks Settings / Inventory / Extras the JS is already in the
+    // module cache, so opening is instant instead of "spinner →
+    // chunk fetch → mount". `requestIdleCallback` waits for an idle
+    // slot so first paint isn't slowed down; we also defer through a
+    // microtask + ~200 ms timeout fallback for Safari/WebView2 which
+    // don't ship `requestIdleCallback`.
+    queueMicrotask(() => {
+      const ric: (cb: () => void) => void =
+        (window as unknown as { requestIdleCallback?: (cb: () => void) => void })
+          .requestIdleCallback ?? ((cb: () => void) => setTimeout(cb, 200));
+      ric(() => {
+        void import("./SettingsModal");
+        void import("./ClaudeInventoryModal");
+        void import("./WorkspaceExtrasPanel");
+      });
+    });
     unlistenStatus = await onWorkspaceStatus((evt) => {
       mutate((list) =>
         list?.map((w) =>
