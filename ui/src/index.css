@@ -279,6 +279,90 @@ body {
   transform: rotate(20deg);
 }
 
+/* Clickable version label — always visible in the topbar so you know
+ * which build you're on. Clicking it re-runs the updater check. */
+.topmeta-version {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: color var(--t-short), background var(--t-short);
+}
+.topmeta-version:hover {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
+/* —— update pill ——
+ * Always rendered next to the version when there's a state to surface
+ * (checking / available / downloading / up-to-date / error). Distinct
+ * from .topmeta-mode (round icon button) so it reads as a call-to-action,
+ * not navigation. */
+.topmeta-update {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  height: 26px;
+  border-radius: 999px;
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition:
+    background var(--t-short),
+    color var(--t-short),
+    border-color var(--t-short),
+    transform var(--t-short) var(--ease-spring);
+  animation: topmeta-update-enter 320ms var(--ease-out, ease-out) both;
+}
+.topmeta-update:hover {
+  background: var(--accent);
+  color: white;
+  transform: translateY(-1px);
+}
+.topmeta-update--busy {
+  cursor: progress;
+  opacity: 0.85;
+  pointer-events: none;
+  animation: topmeta-update-pulse 1.2s ease-in-out infinite;
+}
+.topmeta-update--ok {
+  border-color: var(--border-subtle);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: default;
+  animation: none;
+}
+.topmeta-update--error {
+  border-color: var(--crashed, #c45353);
+  color: var(--crashed, #c45353);
+  background: transparent;
+}
+.topmeta-update--error:hover {
+  background: var(--crashed, #c45353);
+  color: white;
+}
+@keyframes topmeta-update-enter {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes topmeta-update-pulse {
+  0%, 100% { opacity: 0.85; }
+  50%      { opacity: 0.55; }
+}
+
 /* —— layout —— */
 .layout {
   flex: 1;

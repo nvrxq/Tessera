@@ -23,6 +23,8 @@ pub fn run() {
         .with_target(false)
         .init();
 
+    inherit_shell_path();
+
     let data_dir = dirs::data_local_dir()
         .expect("no XDG data dir")
         .join("tessera");
@@ -263,6 +265,50 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// On macOS, double-clicking a `.app` from /Applications launches it with
+/// only the system PATH (/usr/bin:/bin:/usr/sbin:/sbin), not the user's
+/// interactive shell PATH from ~/.zshrc / ~/.zprofile. Result: PTYs we
+/// spawn can't find `claude`, `npm`, `nvm`-installed tools, brew binaries,
+/// etc., and the workspace hangs at "starting claude".
+///
+/// Best-effort fix: run the user's login shell in a non-interactive child,
+/// capture the PATH it would export, and overwrite our own. Subsequent
+/// `Command::spawn` calls inherit the updated PATH automatically.
+///
+/// Silent on failure so a misconfigured shell doesn't break startup.
+/// Must be called BEFORE the Tauri runtime spins up threads — set_var on
+/// the global env is only sound in a single-threaded prelude.
+fn inherit_shell_path() {
+    let Ok(shell) = std::env::var("SHELL") else {
+        return;
+    };
+    // `-l -c` reads ~/.zprofile / ~/.bash_profile (login shells) which is
+    // where PATH is conventionally set on macOS. Avoid `-i` because some
+    // shells refuse it without a controlling TTY.
+    let Ok(out) = std::process::Command::new(&shell)
+        .args(["-l", "-c", "printf %s \"$PATH\""])
+        .output()
+    else {
+        return;
+    };
+    if !out.status.success() {
+        return;
+    }
+    let probed = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if probed.is_empty() {
+        return;
+    }
+    let current = std::env::var("PATH").unwrap_or_default();
+    if probed == current {
+        return;
+    }
+    // SAFETY: called before any other thread is spawned.
+    unsafe {
+        std::env::set_var("PATH", &probed);
+    }
+    tracing::info!(path = %probed, "inherited interactive shell PATH");
 }
 
 fn dispatch_hook(app: &AppHandle, svc: &Arc<WorkspaceService>, evt: HookEvent) {

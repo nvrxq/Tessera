@@ -10,7 +10,6 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
-  readImage as clipReadImage,
   readText as clipReadText,
   writeText as clipWriteText,
 } from "@tauri-apps/plugin-clipboard-manager";
@@ -941,25 +940,19 @@ export default function Terminal(props: TerminalProps) {
             if (k === "v") {
               ev.preventDefault();
               void (async () => {
-                // 1. Text on clipboard → paste as-is into PTY.
+                // Cmd+V pastes text only. We deliberately do NOT fall back
+                // to readImage() because on macOS that triggers a Photos
+                // Library access prompt — Apple classifies any clipboard
+                // image read as Photos access, which is confusing UX for
+                // users who just want to paste a screenshot.
+                // Image attachments: drag the file from Finder onto the
+                // terminal — that path is handled by `tauri://drag-drop`
+                // below without any privacy prompts.
                 try {
                   const text = await clipReadText();
-                  if (text) {
-                    await ptyWriteString(sid, text);
-                    return;
-                  }
-                } catch {
-                  /* No text — fall through to image. plugin-clipboard-manager
-                   *  rejects when the clipboard holds non-text formats. */
-                }
-                // 2. Image on clipboard → save PNG to disk, type the path
-                //    (bracketed-paste wrapped) so Claude Code attaches it.
-                try {
-                  const path = await saveClipboardImageToDisk();
-                  if (!path) return;
-                  await ptyWriteString(sid, `\x1b[200~${path}\x1b[201~`);
+                  if (text) await ptyWriteString(sid, text);
                 } catch (e) {
-                  console.warn("image paste failed", e);
+                  console.warn("text paste failed", e);
                 }
               })();
               return;
@@ -1252,38 +1245,3 @@ async function ptyWriteString(sessionId: string, text: string): Promise<void> {
   await invoke("pty_write", { sessionId, dataB64: btoa(bin) });
 }
 
-/** Read an image from the system clipboard, re-encode it as PNG via
- *  Canvas, persist it through the backend `save_paste_image` command, and
- *  return the on-disk path (or null if the clipboard had no image).
- *
- *  Re-encoding via Canvas is required because the clipboard plugin gives
- *  us raw RGBA, not PNG. We avoid shipping the raw RGBA over IPC (~4× the
- *  PNG size for a typical screenshot) by encoding in the WebView. */
-async function saveClipboardImageToDisk(): Promise<string | null> {
-  const img = await clipReadImage();
-  const size = await img.size();
-  const rgba = await img.rgba();
-  if (!size.width || !size.height || rgba.byteLength === 0) return null;
-
-  const canvas = document.createElement("canvas");
-  canvas.width = size.width;
-  canvas.height = size.height;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return null;
-  const data = new ImageData(
-    new Uint8ClampedArray(rgba),
-    size.width,
-    size.height,
-  );
-  ctx.putImageData(data, 0, 0);
-
-  // toDataURL emits `data:image/png;base64,<payload>` — strip the prefix
-  // and hand the payload straight to the Rust command, which decodes once
-  // and writes to <data_dir>/tessera/pastes/<uuid>.png.
-  const dataUrl = canvas.toDataURL("image/png");
-  const commaIdx = dataUrl.indexOf(",");
-  if (commaIdx < 0) return null;
-  const b64 = dataUrl.slice(commaIdx + 1);
-  const path = await invoke<string>("save_paste_image", { dataB64: b64 });
-  return path;
-}

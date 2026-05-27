@@ -9,6 +9,7 @@ import {
   Suspense,
   type Component,
 } from "solid-js";
+import { getVersion } from "@tauri-apps/api/app";
 import { message } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check as checkForAppUpdate, type Update } from "@tauri-apps/plugin-updater";
@@ -131,27 +132,34 @@ const App: Component = () => {
   });
 
   // ── In-app updater ─────────────────────────────────────────────
-  // Replaces the previous "ask on startup" flow with a topbar pill that
-  // appears only when an update is detected. Click → install + relaunch.
-  // The signature is verified by plugin-updater against the embedded
-  // public key before downloadAndInstall actually swaps the binary, so
-  // we don't need a separate "are you sure" confirmation.
+  // The topbar always shows the running version. Clicking it triggers
+  // a re-check; the pill next to it shows the current update lifecycle
+  // state (checking → up-to-date / available / downloading / error).
+  // Surfacing every state — including errors — instead of silently
+  // hiding them is the only way to debug an updater that doesn't appear
+  // to fire, which was exactly the bug at v0.1.0→v0.1.1 cutover.
   type UpdateState =
     | { kind: "idle" }
+    | { kind: "checking" }
+    | { kind: "uptodate" }
     | { kind: "available"; update: Update }
     | { kind: "downloading"; update: Update; progress: number }
     | { kind: "error"; message: string };
   const [updateState, setUpdateState] = createSignal<UpdateState>({ kind: "idle" });
+  const [version, setVersion] = createSignal<string>("");
+  void getVersion().then(setVersion).catch(() => setVersion("?"));
 
   const runUpdateCheck = async () => {
+    setUpdateState({ kind: "checking" });
     try {
       const update = await checkForAppUpdate();
       if (update?.available) {
         setUpdateState({ kind: "available", update });
+      } else {
+        setUpdateState({ kind: "uptodate" });
       }
     } catch (e) {
-      // Dev / unsigned / network-down — quietly ignore so the app still
-      // boots. The pill only surfaces when an update is actually offered.
+      setUpdateState({ kind: "error", message: String(e) });
       console.warn("update check failed", e);
     }
   };
@@ -406,51 +414,63 @@ const App: Component = () => {
             <span class="topnav-item">Hooks.</span>
           </nav>
           <div class="topmeta">
-            <Show when={updateState().kind !== "idle"}>
-              {(() => {
-                const st = updateState();
-                if (st.kind === "available") {
-                  return (
-                    <button
-                      type="button"
-                      class="topmeta-update"
-                      onClick={applyUpdate}
-                      title={`Install Tessera v${st.update.version} and relaunch.${st.update.body ? "\n\n" + st.update.body : ""}`}
-                    >
-                      <span aria-hidden="true">↑</span> Update v{st.update.version}
-                    </button>
-                  );
-                }
-                if (st.kind === "downloading") {
-                  return (
-                    <button
-                      type="button"
-                      class="topmeta-update topmeta-update--busy"
-                      disabled
-                      title="Downloading update…"
-                    >
-                      Updating… {Math.round(st.progress)}%
-                    </button>
-                  );
-                }
-                if (st.kind === "error") {
-                  return (
-                    <button
-                      type="button"
-                      class="topmeta-update topmeta-update--error"
-                      onClick={() => {
-                        setUpdateState({ kind: "idle" });
-                        void runUpdateCheck();
-                      }}
-                      title={`Update failed: ${st.message}\nClick to retry.`}
-                    >
-                      ↻ Retry update
-                    </button>
-                  );
-                }
-                return null;
-              })()}
-            </Show>
+            <button
+              type="button"
+              class="topmeta-version"
+              onClick={() => void runUpdateCheck()}
+              title="Click to check for updates"
+            >
+              v{version() || "…"}
+            </button>
+            {(() => {
+              const st = updateState();
+              if (st.kind === "checking") {
+                return (
+                  <span class="topmeta-update topmeta-update--busy" title="Checking for updates…">
+                    Checking…
+                  </span>
+                );
+              }
+              if (st.kind === "uptodate") {
+                return (
+                  <span class="topmeta-update topmeta-update--ok" title="You're on the latest version">
+                    ✓ Up to date
+                  </span>
+                );
+              }
+              if (st.kind === "available") {
+                return (
+                  <button
+                    type="button"
+                    class="topmeta-update"
+                    onClick={applyUpdate}
+                    title={`Install Tessera v${st.update.version} and relaunch.${st.update.body ? "\n\n" + st.update.body : ""}`}
+                  >
+                    <span aria-hidden="true">↑</span> Update v{st.update.version}
+                  </button>
+                );
+              }
+              if (st.kind === "downloading") {
+                return (
+                  <span class="topmeta-update topmeta-update--busy" title="Downloading update…">
+                    Updating… {Math.round(st.progress)}%
+                  </span>
+                );
+              }
+              if (st.kind === "error") {
+                return (
+                  <button
+                    type="button"
+                    class="topmeta-update topmeta-update--error"
+                    onClick={() => void runUpdateCheck()}
+                    title={`Update check failed:\n${st.message}\n\nClick to retry.`}
+                  >
+                    ⚠ {st.message.slice(0, 40)}{st.message.length > 40 ? "…" : ""}
+                  </button>
+                );
+              }
+              return null;
+            })()}
             <span class="topmeta-clock">{clock()}</span>
             <button
               type="button"
