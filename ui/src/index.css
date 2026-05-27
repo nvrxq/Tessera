@@ -958,6 +958,7 @@ body {
 
 /* status dots */
 .status-dot {
+  position: relative; /* anchor for the ::after halo */
   flex-shrink: 0;
   width: 8px;
   height: 8px;
@@ -967,25 +968,51 @@ body {
   box-shadow: 0 0 0 1px var(--surface-elevated) inset;
   transition: background var(--t-medium) var(--ease-out), box-shadow var(--t-medium) var(--ease-out);
 }
+/* Halo lives on a pseudo-element so the breathing animation only
+ * touches transform + opacity on a separately-composited layer — those
+ * are GPU-compositor friendly and skip the paint thread. The visible
+ * dot itself stays a fixed 8px (DESIGN.md: dot keeps its size; only
+ * the glow breathes). Hidden by default; per-status rules opt in. */
+.status-dot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  will-change: transform, opacity;
+}
 .status-none { background: var(--idle); opacity: 0.5; }
 .status-idle { background: var(--idle); }
 .status-working {
   background: var(--working);
+}
+.status-working::after {
   box-shadow: 0 0 10px rgba(91, 141, 239, 0.65);
+  opacity: 1;
   animation: dot-breathe 1.6s ease-in-out infinite;
 }
 .status-needs_input {
   background: var(--needs-input);
+}
+.status-needs_input::after {
   box-shadow: 0 0 10px rgba(230, 200, 76, 0.65);
+  opacity: 1;
   animation: dot-attention 2.2s ease-in-out infinite;
 }
 .status-done {
   background: var(--success);
+}
+.status-done::after {
   box-shadow: 0 0 8px rgba(127, 189, 127, 0.35);
+  opacity: 1;
 }
 .status-crashed {
   background: var(--crashed);
+}
+.status-crashed::after {
   box-shadow: 0 0 8px rgba(217, 102, 102, 0.4);
+  opacity: 1;
 }
 
 /* —— sidebar "new" circular button (editorial, like the reference) —— */
