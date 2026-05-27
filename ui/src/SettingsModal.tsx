@@ -18,6 +18,7 @@ import {
   type Density,
   type UserConfig,
 } from "./lib/settings";
+import SettingsPreview from "./SettingsPreview";
 
 export interface SettingsModalProps {
   onClose: () => void;
@@ -201,6 +202,16 @@ const SettingsModal: Component<SettingsModalProps> = (props) => {
               <BehaviorSection draft={draft()} patch={patch} />
             </Show>
           </div>
+
+          {/* Live preview column — sticky to the right so every section
+              (Appearance / Terminal / Cursor / Behavior) sees its edits
+              reflected on the synthetic mini-terminal without scrolling.
+              The pane reads the *draft* signal, not the persisted one, so
+              changes apply per-keystroke before Save. */}
+          <aside class="settings-preview-pane" aria-label="Live preview">
+            <span class="settings-preview-label">Preview</span>
+            <SettingsPreview cfg={draft} />
+          </aside>
         </div>
 
         <footer class="settings-foot">

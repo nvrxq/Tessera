@@ -279,61 +279,6 @@ body {
   transform: rotate(20deg);
 }
 
-/* —— update pill ——
- * Hidden until plugin-updater says a new version exists, then surfaces in
- * the topbar with the version number. Distinct from .topmeta-mode (round
- * icon button) so it reads as a call-to-action, not navigation. */
-.topmeta-update {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  height: 26px;
-  border-radius: 999px;
-  border: 1px solid var(--accent);
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-  cursor: pointer;
-  transition:
-    background var(--t-short),
-    color var(--t-short),
-    border-color var(--t-short),
-    transform var(--t-short) var(--ease-spring);
-  animation: topmeta-update-enter 320ms var(--ease-out, ease-out) both;
-}
-.topmeta-update:hover {
-  background: var(--accent);
-  color: white;
-  transform: translateY(-1px);
-}
-.topmeta-update--busy {
-  cursor: progress;
-  opacity: 0.85;
-  pointer-events: none;
-  animation: topmeta-update-pulse 1.2s ease-in-out infinite;
-}
-.topmeta-update--error {
-  border-color: var(--crashed, #c45353);
-  color: var(--crashed, #c45353);
-  background: transparent;
-}
-.topmeta-update--error:hover {
-  background: var(--crashed, #c45353);
-  color: white;
-}
-@keyframes topmeta-update-enter {
-  from { opacity: 0; transform: translateY(-4px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-@keyframes topmeta-update-pulse {
-  0%, 100% { opacity: 0.85; }
-  50%      { opacity: 0.55; }
-}
-
 /* —— layout —— */
 .layout {
   flex: 1;
@@ -1674,14 +1619,6 @@ button[type="submit"]:hover:not(:disabled) {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
 }
-/* Inline plus / text combo — keeps the icon at 12px with a thin gap so
- * the row still reads as a single primary action, not a button group. */
-.extras-btn--with-icon {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  justify-content: center;
-}
 .extras-error {
   color: var(--crashed);
   font-size: 12px;
@@ -1762,40 +1699,6 @@ button[type="submit"]:hover:not(:disabled) {
 /* —— tasks —— */
 .extras-task-form {
   display: flex;
-  gap: 6px;
-  align-items: stretch;
-}
-/* Square pill on the right of the input — matches the close (×) icon's
- * stroke weight and hover treatment. Without it the user has to know to
- * press Enter, which is undiscoverable. */
-.extras-task-add {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: auto;
-  padding: 0;
-  background: var(--surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: 4px;
-  color: var(--text-muted);
-  letter-spacing: 0;
-  text-transform: none;
-  cursor: pointer;
-  transition:
-    color var(--t-micro),
-    background-color var(--t-micro),
-    border-color var(--t-micro);
-}
-.extras-task-add:hover:not(:disabled) {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: var(--accent-soft);
-}
-.extras-task-add:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 .extras-task-list {
   list-style: none;
@@ -1880,144 +1783,44 @@ button[type="submit"]:hover:not(:disabled) {
   background: var(--surface-hover);
 }
 
-/* —— pomodoro HUD (global, pinned to the sidebar foot) ——
- * Compact one-line bar: mode dot + countdown in Geist Mono + play/pause
- * pill. Click the bar to flip open a small popover with work/break/reset
- * actions. Lives in the sidebar because the timer is app-wide and should
- * be visible regardless of which workspace is selected. */
-.pomodoro-hud {
-  position: relative;
-  margin: 0 22px 12px;
-}
-.pomodoro-hud-bar {
-  display: flex;
+/* —— pomodoro —— */
+.extras-pomodoro {
   align-items: center;
+  text-align: center;
+  padding-top: 16px;
   gap: 8px;
-  width: 100%;
-  background: var(--surface-elevated);
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  padding: 6px 10px;
-  cursor: pointer;
-  letter-spacing: 0;
-  text-transform: none;
-  font-family: var(--font-ui);
+}
+.extras-pomodoro-mode {
   font-size: 12px;
   font-weight: 500;
-  color: var(--text-secondary);
-  transition:
-    border-color var(--t-micro),
-    background-color var(--t-micro),
-    color var(--t-micro);
-}
-.pomodoro-hud-bar:hover {
-  background: var(--surface-hover);
-  border-color: var(--border-strong);
-  color: var(--text-primary);
-}
-.pomodoro-hud-bar--running {
-  border-color: var(--accent);
-  color: var(--text-primary);
-}
-.pomodoro-hud-dot {
-  flex-shrink: 0;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--idle);
-  box-shadow: 0 0 0 1px var(--surface-elevated) inset;
-}
-.pomodoro-hud-dot--idle { background: var(--idle); }
-.pomodoro-hud-dot--work {
-  background: var(--accent);
-  box-shadow: 0 0 8px rgba(200, 130, 91, 0.55);
-  animation: dot-breathe 1.6s ease-in-out infinite;
-}
-.pomodoro-hud-dot--break {
-  background: var(--success);
-  box-shadow: 0 0 8px rgba(127, 189, 127, 0.45);
-}
-.pomodoro-hud-dot--paused {
-  background: var(--needs-input);
-  box-shadow: 0 0 8px rgba(230, 200, 76, 0.45);
-}
-.pomodoro-hud-countdown {
-  flex: 1;
-  font-family: var(--font-mono);
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-  color: inherit;
-  letter-spacing: 0.02em;
-}
-.pomodoro-hud-playpause {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: var(--surface);
-  border: 1px solid var(--border-subtle);
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition:
-    color var(--t-micro),
-    background-color var(--t-micro),
-    border-color var(--t-micro);
-}
-.pomodoro-hud-playpause:hover {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: var(--accent-soft);
-}
-.pomodoro-hud-popover {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 0;
-  right: 0;
-  z-index: 20;
-  background: var(--surface-elevated);
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  padding: 10px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-  animation: workspace-menu-pop 120ms var(--ease-out) both;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.pomodoro-hud-popover-cycles {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
+  letter-spacing: 0.08em;
   text-transform: uppercase;
+  color: var(--text-muted);
 }
-.pomodoro-hud-popover-actions {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-.pomodoro-hud-action {
-  flex: 1;
-  background: var(--surface);
-  border: 1px solid var(--border-subtle);
-  color: var(--text-primary);
-  font-family: var(--font-ui);
-  font-size: 11px;
+.extras-pomodoro-countdown {
+  font-family: var(--font-mono);
+  font-size: 48px;
+  line-height: 1.05;
   font-weight: 500;
-  letter-spacing: 0.04em;
-  text-transform: none;
-  padding: 6px 8px;
-  border-radius: 5px;
-  cursor: pointer;
-  transition: background-color var(--t-micro), border-color var(--t-micro);
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
 }
-.pomodoro-hud-action:hover:not(:disabled) {
-  background: var(--surface-hover);
-  border-color: var(--accent);
+.extras-pomodoro-countdown--running {
   color: var(--accent);
+}
+.extras-pomodoro-cycles {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.extras-pomodoro-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.extras-pomodoro-primary {
+  min-width: 88px;
 }
 
 /* —— empty state (mosaic motif from DESIGN.md) —— */
@@ -2076,7 +1879,9 @@ button[type="submit"]:hover:not(:disabled) {
   border-radius: 10px;
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
   width: 100%;
-  max-width: 720px;
+  /* Widened from 720 → 960 to make room for the live-preview column
+     while still leaving the form column comfortably readable. */
+  max-width: 960px;
   max-height: 80vh;
   display: flex;
   flex-direction: column;
@@ -2118,7 +1923,10 @@ button[type="submit"]:hover:not(:disabled) {
 
 .settings-body {
   display: grid;
-  grid-template-columns: 160px 1fr;
+  /* Third column is the sticky live-preview pane. minmax keeps it from
+     collapsing on narrow viewports but caps it at 360 so the form column
+     keeps the lion's share of horizontal space. */
+  grid-template-columns: 160px 1fr minmax(280px, 360px);
   min-height: 0;
   flex: 1;
   overflow: hidden;
@@ -2393,6 +2201,46 @@ button[type="submit"]:hover:not(:disabled) {
 .settings-primary:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* —— Live settings preview ————————————————————————————————————————
+   Sticky right column inside `.settings-body`. The canvas inside is
+   sized in CSS to a fixed 480×180 box (the actual backing store is
+   scaled by DPR in SettingsPreview.tsx), and we centre it inside a
+   card that matches the rest of the modal: surface-elevated, subtle
+   border, 10px radius, 12px inner padding. */
+.settings-preview-pane {
+  border-left: 1px solid var(--border-subtle);
+  padding: 18px 18px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* The preview is its own grid cell; the grid pins it visually. `sticky`
+     would degrade to static here because the form column scrolls
+     independently and the preview has no scrollable ancestor. */
+  align-self: start;
+  background: var(--surface);
+  overflow: hidden;
+}
+.settings-preview-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.settings-preview-canvas {
+  display: block;
+  /* Width / height set inline by the component; the box is fixed so the
+     surrounding card doesn't reflow while the user drags the font-size
+     slider — the grid inside re-measures instead. */
+  width: 480px;
+  height: 180px;
+  max-width: 100%;
+  border-radius: 10px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg);
 }
 
 /* —— claude inventory modal ——
