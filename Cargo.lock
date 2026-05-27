@@ -6224,7 +6224,7 @@ dependencies = [
 
 [[package]]
 name = "tessera"
-version = "0.1.3"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -6257,7 +6257,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-core"
-version = "0.1.3"
+version = "0.1.5"
 dependencies = [
  "chrono",
  "dirs 5.0.1",
@@ -6271,7 +6271,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-git"
-version = "0.1.3"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "git2",
@@ -6284,7 +6284,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-hook"
-version = "0.1.3"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "serde",
@@ -6300,7 +6300,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-overlay"
-version = "0.1.3"
+version = "0.1.5"
 dependencies = [
  "raw-window-handle",
  "tessera-render",
@@ -6314,7 +6314,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-pty"
-version = "0.1.3"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "portable-pty",
@@ -6329,7 +6329,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-render"
-version = "0.1.3"
+version = "0.1.5"
 dependencies = [
  "bytemuck",
  "env_logger",
@@ -6343,7 +6343,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-store"
-version = "0.1.3"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6359,7 +6359,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-term"
-version = "0.1.3"
+version = "0.1.5"
 dependencies = [
  "serde_json",
  "tessera-render",
@@ -6371,7 +6371,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-workspace"
-version = "0.1.3"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "chrono",
