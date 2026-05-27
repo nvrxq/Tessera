@@ -412,12 +412,10 @@ body {
   align-items: flex-start;
   gap: 6px;
   letter-spacing: -0.005em;
-  line-height: 1.2;
+  line-height: 1.43;
 }
 .workspace-name-text {
-  word-break: break-word;
   overflow-wrap: anywhere;
-  line-height: 1.2;
   min-width: 0;
   flex: 1;
 }
