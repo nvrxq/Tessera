@@ -6,6 +6,7 @@ import {
   readText as clipReadText,
   writeText as clipWriteText,
 } from "@tauri-apps/plugin-clipboard-manager";
+import { setTerminalFontSize, settings } from "./lib/settings";
 import { spawnAgent } from "./lib/workspaces";
 
 export interface TerminalProps {
@@ -36,21 +37,18 @@ interface Snapshot {
   cursor_shape: "block" | "bar" | "underline";
 }
 
-const FONT_FAMILY =
-  '"JetBrains Mono", "Geist Mono", "Fira Code", ui-monospace, Menlo, monospace';
-const DEFAULT_FONT_PX = 14;
 const MIN_FONT_PX = 8;
 const MAX_FONT_PX = 32;
-const DEFAULT_BG = 0x0f0f10;
-const DEFAULT_FG_HEX = "#E8E8E6";
 
-const FONT_PX_STORAGE_KEY = "tessera.fontPx";
-const loadFontPx = (): number => {
-  const raw = localStorage.getItem(FONT_PX_STORAGE_KEY);
-  const n = raw == null ? DEFAULT_FONT_PX : Number(raw);
-  if (!Number.isFinite(n)) return DEFAULT_FONT_PX;
-  return Math.min(MAX_FONT_PX, Math.max(MIN_FONT_PX, n));
-};
+/** Parse `#RRGGBB` → 0xRRGGBB int. Used to detect "this cell is the
+ *  default background, skip painting it" in the full-paint fast path. */
+function hexToInt(hex: string): number {
+  if (hex.length !== 7 || hex[0] !== "#") return 0x0f0f10;
+  const n = parseInt(hex.slice(1), 16);
+  return Number.isFinite(n) ? n : 0x0f0f10;
+}
+
+const CURSOR_BLINK_MS = 530;
 
 export default function Terminal(props: TerminalProps) {
   let host!: HTMLDivElement;
@@ -99,12 +97,50 @@ export default function Terminal(props: TerminalProps) {
     return ctx2d;
   };
 
-  let fontPx = loadFontPx();
+  // Snapshot values from the settings store. Live updates re-run the
+  // createEffect below so changes apply without remounting the canvas.
+  let fontPx = settings().terminal.font_size_px;
+  let fontFamily = settings().terminal.font_family;
+  let bgInt = hexToInt(settings().terminal.background);
+  let bgHex = settings().terminal.background;
+  let cursorColorHex = settings().terminal.cursor_color;
+  let cursorBlinkEnabled = settings().terminal.cursor_blink;
   let cellW = 0;
   let cellH = 0;
   let baseline = 0;
   let lastKeydownAt = 0;
   const spawning = new Set<string>();
+
+  // Cursor blink: `cursorBlinkVisible` toggles every CURSOR_BLINK_MS while
+  // the cursor is on; it's reset to true on every keystroke so the user
+  // never types into an "invisible" gap. Disabled when settings say so.
+  let cursorBlinkVisible = true;
+  let cursorBlinkTimer: number | null = null;
+  function stopCursorBlink() {
+    if (cursorBlinkTimer != null) {
+      window.clearInterval(cursorBlinkTimer);
+      cursorBlinkTimer = null;
+    }
+    cursorBlinkVisible = true;
+  }
+  function startCursorBlink() {
+    stopCursorBlink();
+    if (!cursorBlinkEnabled) return;
+    cursorBlinkTimer = window.setInterval(() => {
+      if (!lastCursorVisible) return;
+      cursorBlinkVisible = !cursorBlinkVisible;
+      const ctx = ctx2dOf();
+      if (!ctx) return;
+      const px = fontPx * (window.devicePixelRatio || 1);
+      const idx = lastCursorRow * gridCols + lastCursorCol;
+      if (idx >= 0 && idx < grid.length) {
+        paintCell(ctx, idx, px);
+      }
+      if (cursorBlinkVisible) {
+        paintCursor(ctx, lastCursorCol, lastCursorRow, lastCursorShape, px);
+      }
+    }, CURSOR_BLINK_MS);
+  }
 
   // ── Text selection on the canvas ──
   // Canvas2D has no DOM text, so we maintain our own grid selection.
@@ -237,7 +273,7 @@ export default function Terminal(props: TerminalProps) {
     const ctx = ctx2dOf();
     if (!ctx) return;
     const px = fontPx * dpr;
-    ctx.font = `${px}px ${FONT_FAMILY}`;
+    ctx.font = `${px}px ${fontFamily}`;
     const m = ctx.measureText("M");
     cellW = Math.max(1, Math.round(m.width));
     const ascent =
@@ -313,7 +349,7 @@ export default function Terminal(props: TerminalProps) {
       ctx.font =
         (bold ? "bold " : "") +
         (italic ? "italic " : "") +
-        `${px}px ${FONT_FAMILY}`;
+        `${px}px ${fontFamily}`;
       ctx.fillStyle = hexColor(cell.f);
       ctx.textBaseline = "alphabetic";
       ctx.fillText(cell.c, x, y + baseline);
@@ -342,7 +378,7 @@ export default function Terminal(props: TerminalProps) {
     const x = col * cellW;
     const y = row * cellH;
     const thick = Math.max(1, Math.round(px * 0.1));
-    ctx.fillStyle = DEFAULT_FG_HEX;
+    ctx.fillStyle = cursorColorHex;
     if (shape === "block") {
       ctx.globalAlpha = 0.6;
       ctx.fillRect(x, y, cellW, cellH);
@@ -357,10 +393,10 @@ export default function Terminal(props: TerminalProps) {
   function paintFull(px: number) {
     const ctx = ctx2dOf();
     if (!ctx) return;
-    ctx.fillStyle = "#0F0F10";
+    ctx.fillStyle = bgHex;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.textBaseline = "alphabetic";
-    ctx.font = `${px}px ${FONT_FAMILY}`;
+    ctx.font = `${px}px ${fontFamily}`;
 
     // Pass 1: backgrounds — batch contiguous non-default runs per row.
     for (let r = 0; r < gridRows; r++) {
@@ -369,7 +405,7 @@ export default function Terminal(props: TerminalProps) {
       let runStart = 0;
       for (let c = 0; c < gridCols; c++) {
         const cell = grid[r * gridCols + c];
-        const bg = cell.b !== DEFAULT_BG ? cell.b : -1;
+        const bg = cell.b !== bgInt ? cell.b : -1;
         if (bg !== runColor) {
           if (runColor >= 0) {
             ctx.fillStyle = hexColor(runColor);
@@ -421,7 +457,7 @@ export default function Terminal(props: TerminalProps) {
         const fontKey =
           (bold ? "bold " : "") +
           (italic ? "italic " : "") +
-          `${px}px ${FONT_FAMILY}`;
+          `${px}px ${fontFamily}`;
         const isBlank = cell.c === " " && (cell.a & 28) === 0;
         if (
           !isBlank &&
@@ -507,7 +543,7 @@ export default function Terminal(props: TerminalProps) {
       grid = snap.cells.slice();
       // grid may be shorter than cols*rows on first paint — pad blanks.
       while (grid.length < gridCols * gridRows) {
-        grid.push({ c: " ", f: 0xe8e8e6, b: DEFAULT_BG, a: 0 });
+        grid.push({ c: " ", f: hexToInt(settings().terminal.foreground), b: bgInt, a: 0 });
       }
       paintFull(px);
     } else {
@@ -667,6 +703,9 @@ export default function Terminal(props: TerminalProps) {
     ro.observe(host);
     onCleanup(() => ro.disconnect());
 
+    if (cursorBlinkEnabled) startCursorBlink();
+    onCleanup(() => stopCursorBlink());
+
     // Drag-and-drop of files from Finder / file manager. Tauri 2 captures
     // OS-level drag-drop and emits `tauri://drag-drop` with the absolute
     // paths plus the drop position. HTML5 drop events do NOT fire while
@@ -705,6 +744,12 @@ export default function Terminal(props: TerminalProps) {
       const sid = activeSessionId;
       if (!sid) return;
       lastKeydownAt = performance.now();
+      // Cursor should always be visible while the user is actively
+      // typing; reset the blink phase so the cursor doesn't disappear
+      // mid-keystroke. The interval continues running.
+      if (cursorBlinkEnabled && !cursorBlinkVisible) {
+        cursorBlinkVisible = true;
+      }
       if (
         (ev.ctrlKey || ev.metaKey) &&
         (ev.key === "r" || ev.key === "R" || ev.key === "F5")
@@ -712,25 +757,26 @@ export default function Terminal(props: TerminalProps) {
         return;
       }
       if ((ev.ctrlKey || ev.metaKey) && !ev.altKey) {
+        // Ctrl/Cmd +/- zooms the terminal font. Persist through the
+        // settings store (not localStorage) so the change is part of the
+        // user's settings JSON and the modal stays in sync. The
+        // settings_changed event re-runs our createEffect → fontPx and
+        // measureCell are reapplied automatically.
         if (ev.key === "=" || ev.key === "+") {
           ev.preventDefault();
-          fontPx = Math.min(MAX_FONT_PX, fontPx + 1);
-          localStorage.setItem(FONT_PX_STORAGE_KEY, String(fontPx));
-          void syncGrid();
+          const next = Math.min(MAX_FONT_PX, fontPx + 1);
+          void setTerminalFontSize(next);
           return;
         }
         if (ev.key === "-" || ev.key === "_") {
           ev.preventDefault();
-          fontPx = Math.max(MIN_FONT_PX, fontPx - 1);
-          localStorage.setItem(FONT_PX_STORAGE_KEY, String(fontPx));
-          void syncGrid();
+          const next = Math.max(MIN_FONT_PX, fontPx - 1);
+          void setTerminalFontSize(next);
           return;
         }
         if (ev.key === "0") {
           ev.preventDefault();
-          fontPx = DEFAULT_FONT_PX;
-          localStorage.setItem(FONT_PX_STORAGE_KEY, String(fontPx));
-          void syncGrid();
+          void setTerminalFontSize(14);
           return;
         }
         // Copy / paste. macOS: Cmd+C/V. Linux convention: Ctrl+Shift+C/V
@@ -796,6 +842,42 @@ export default function Terminal(props: TerminalProps) {
     onCleanup(() => document.removeEventListener("keydown", onKey));
 
     host.focus();
+  });
+
+  // Live-react to settings changes: font / palette swaps re-measure the
+  // cell grid and force a full repaint. `prev*` guards skip re-syncs
+  // when the new value is identical (e.g. an unrelated section of the
+  // config changed — typing in the cursor color picker shouldn't
+  // re-measure the grid).
+  let prevFont = fontFamily;
+  let prevFontPx = fontPx;
+  let prevBg = bgHex;
+  let prevBlink = cursorBlinkEnabled;
+  createEffect(() => {
+    const cfg = settings();
+    fontFamily = cfg.terminal.font_family;
+    fontPx = cfg.terminal.font_size_px;
+    bgHex = cfg.terminal.background;
+    bgInt = hexToInt(bgHex);
+    cursorColorHex = cfg.terminal.cursor_color;
+    cursorBlinkEnabled = cfg.terminal.cursor_blink;
+    const fontChanged = prevFont !== fontFamily || prevFontPx !== fontPx;
+    const bgChanged = prevBg !== bgHex;
+    const blinkChanged = prevBlink !== cursorBlinkEnabled;
+    prevFont = fontFamily;
+    prevFontPx = fontPx;
+    prevBg = bgHex;
+    prevBlink = cursorBlinkEnabled;
+    if (fontChanged) {
+      void syncGrid();
+    } else if (bgChanged) {
+      // Same grid dims; just repaint with the new background.
+      if (grid.length > 0) repaintFromGrid();
+    }
+    if (blinkChanged) {
+      if (cursorBlinkEnabled) startCursorBlink();
+      else stopCursorBlink();
+    }
   });
 
   createEffect(() => {

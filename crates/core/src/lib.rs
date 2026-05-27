@@ -1,9 +1,14 @@
 //! Domain types shared across the app.
 
+pub mod config;
 pub mod error;
 pub mod session;
 pub mod workspace;
 
+pub use config::{
+    config_path, AppearanceConfig, BehaviorConfig, CursorShape, Density, HexColor, TerminalConfig,
+    UserConfig, SCHEMA_VERSION,
+};
 pub use error::CoreError;
 pub use session::{AgentSession, AgentStatus};
 pub use workspace::{Project, SetupStatus, Workspace};
