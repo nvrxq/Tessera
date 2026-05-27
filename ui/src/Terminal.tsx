@@ -52,6 +52,20 @@ const loadFontPx = (): number => {
   return Math.min(MAX_FONT_PX, Math.max(MIN_FONT_PX, n));
 };
 
+/** Claude Code's TUI frequently sends DECTCEM (`\e[?25l`) to hide the
+ *  cursor, which then propagates faithfully through wezterm-term and lands
+ *  in our snapshots as `cursor_visible: false`. The result for the user
+ *  is "у меня нет курсора" — they never see a typing indicator. Override
+ *  the PTY's choice and paint our own cursor anyway when this is true.
+ *  Defaults to `true` so the cursor is visible out of the box; a future
+ *  Settings panel can flip this via the same key. */
+const ALWAYS_SHOW_CURSOR_KEY = "tessera.term.alwaysShowCursor";
+const loadAlwaysShowCursor = (): boolean => {
+  const raw = localStorage.getItem(ALWAYS_SHOW_CURSOR_KEY);
+  if (raw === null) return true;
+  return raw !== "false" && raw !== "0";
+};
+
 export default function Terminal(props: TerminalProps) {
   let host!: HTMLDivElement;
   let canvas!: HTMLCanvasElement;
@@ -100,6 +114,7 @@ export default function Terminal(props: TerminalProps) {
   };
 
   let fontPx = loadFontPx();
+  const alwaysShowCursor = loadAlwaysShowCursor();
   let cellW = 0;
   let cellH = 0;
   let baseline = 0;
@@ -339,9 +354,13 @@ export default function Terminal(props: TerminalProps) {
     px: number,
   ) {
     if (col < 0 || row < 0) return;
+    if (col >= gridCols || row >= gridRows) return;
     const x = col * cellW;
     const y = row * cellH;
-    const thick = Math.max(1, Math.round(px * 0.1));
+    // Bar/underline thickness: 10% of font px, floored to 2 device-pixels.
+    // The previous floor of 1 produced a 1-CSS-px bar at 14px that all but
+    // disappeared against `#0F0F10` on a low-DPI display.
+    const thick = Math.max(2, Math.round(px * 0.1));
     ctx.fillStyle = DEFAULT_FG_HEX;
     if (shape === "block") {
       ctx.globalAlpha = 0.6;
@@ -524,18 +543,36 @@ export default function Terminal(props: TerminalProps) {
     // Cursor: erase old, draw new. Each cursor cell is repainted via
     // paintCell to restore its underlying glyph + bg before deciding to
     // re-overlay the cursor on top.
+    //
+    // Two failure modes the previous code had:
+    //   1. Delta overpaint: when typing-echo lands in a delta whose
+    //      positions include the cursor's current cell, paintCell wipes
+    //      the cursor and we never re-stamp it (the erase branch only
+    //      fires when the cursor MOVED). Fix: always re-stamp when
+    //      `shouldShowCursor` is true, regardless of move.
+    //   2. Claude Code's TUI ships DECTCEM (\e[?25l) frequently —
+    //      wezterm-term faithfully reports `visible: false` and the
+    //      user sees no cursor at all ("у меня нет курсора"). Fix:
+    //      override with `alwaysShowCursor` (default `true`).
     const ctx = ctx2dOf();
     if (!ctx) return;
+    const shouldShowCursor = snap.cursor_visible || alwaysShowCursor;
+    // Erase the previous cursor cell if we painted one AND either the
+    // position changed or we're about to stop painting a cursor. (If
+    // we're about to repaint at the SAME position, the unconditional
+    // paintCursor below covers it.)
     if (
       lastCursorVisible &&
-      (lastCursorCol !== snap.cursor_col || lastCursorRow !== snap.cursor_row)
+      (!shouldShowCursor ||
+        lastCursorCol !== snap.cursor_col ||
+        lastCursorRow !== snap.cursor_row)
     ) {
       const oldIdx = lastCursorRow * gridCols + lastCursorCol;
       if (oldIdx >= 0 && oldIdx < grid.length) {
         paintCell(ctx, oldIdx, px);
       }
     }
-    if (snap.cursor_visible) {
+    if (shouldShowCursor) {
       paintCursor(
         ctx,
         snap.cursor_col,
@@ -546,7 +583,7 @@ export default function Terminal(props: TerminalProps) {
     }
     lastCursorCol = snap.cursor_col;
     lastCursorRow = snap.cursor_row;
-    lastCursorVisible = snap.cursor_visible;
+    lastCursorVisible = shouldShowCursor;
     lastCursorShape = snap.cursor_shape;
 
     // A delta path may have overpainted cells that the user has selected;
