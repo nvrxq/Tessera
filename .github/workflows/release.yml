@@ -77,15 +77,48 @@ jobs:
           releaseBody: 'Auto-built release. Install via the one-liner in the README, or grab the asset for your platform below. macOS builds are not Apple-notarised — strip Gatekeeper quarantine with `xattr -dr com.apple.quarantine /Applications/Tessera.app` if needed.'
           releaseDraft: false
           prerelease: false
-          # Only the macOS job writes latest.json. With matrix builds, the
-          # second job to finish hits "Requires authentication" trying to
-          # overwrite the manifest the first job already uploaded, which
-          # marks the whole job failed even though all artifacts published
-          # fine. Pinning manifest authority to one platform avoids the race.
-          # Caveat: the resulting latest.json contains only macOS entries,
-          # so Linux users won't currently get auto-updates and have to
-          # re-run install.sh. macOS is our primary platform — acceptable.
-          # Proper fix would be a finalisation job that merges signatures
-          # from all matrix jobs into one cross-platform manifest.
+          # Only the macOS job writes latest.json — with both jobs writing
+          # it in a matrix, the second-to-finish hits "Requires authentication"
+          # on the overwrite. The follow-up `manifest` job below patches in
+          # the linux-x86_64 entry once the Linux job has uploaded its sig.
           includeUpdaterJson: ${{ matrix.label == 'macos-arm64' }}
           args: ${{ matrix.target != '' && format('--target {0}', matrix.target) || '' }}
+
+  manifest:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: patch latest.json with linux-x86_64
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          REPO="${GITHUB_REPOSITORY}"
+          BASE="https://github.com/${REPO}/releases/download/${TAG}"
+
+          WORK="$(mktemp -d)"
+          cd "$WORK"
+
+          # Pull the manifest the macOS job uploaded and the AppImage
+          # signature the Linux job uploaded. Both are guaranteed to
+          # exist here because `needs: build` waited for both matrix
+          # jobs to finish successfully.
+          gh release download "$TAG" -R "$REPO" -p "latest.json"
+          gh release download "$TAG" -R "$REPO" \
+            -p "Tessera_${VERSION}_amd64.AppImage.sig"
+
+          LINUX_SIG="$(cat "Tessera_${VERSION}_amd64.AppImage.sig")"
+          LINUX_URL="${BASE}/Tessera_${VERSION}_amd64.AppImage"
+
+          jq --arg sig "$LINUX_SIG" --arg url "$LINUX_URL" \
+            '.platforms["linux-x86_64"] = {signature: $sig, url: $url}' \
+            latest.json > latest.patched.json
+
+          mv latest.patched.json latest.json
+          echo "--- patched latest.json ---"
+          cat latest.json
+
+          gh release upload "$TAG" latest.json -R "$REPO" --clobber
