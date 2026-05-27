@@ -34,8 +34,11 @@ pub fn run() {
     let supervisor: Arc<Supervisor> = Arc::new(Supervisor::new());
 
     let worktree_root = data_dir.join("worktrees");
-    let workspace_service: Arc<WorkspaceService> =
-        Arc::new(WorkspaceService::new(db, supervisor.clone(), worktree_root));
+    let workspace_service: Arc<WorkspaceService> = Arc::new(WorkspaceService::new(
+        db.clone(),
+        supervisor.clone(),
+        worktree_root,
+    ));
 
     let registry: Arc<TerminalRegistry> = Arc::new(TerminalRegistry::new());
     let grid_sizes: GridSizes = Arc::new(Mutex::new(std::collections::HashMap::new()));
@@ -51,6 +54,7 @@ pub fn run() {
         .manage(workspace_service.clone())
         .manage(registry.clone())
         .manage(grid_sizes.clone())
+        .manage::<commands::DbState>(db.clone())
         .setup(move |app| {
             let handle = app.handle().clone();
 
@@ -223,6 +227,20 @@ pub fn run() {
             commands::list_directories,
             commands::save_paste_image,
             commands::terminal_scroll,
+            commands::workspace_links_list,
+            commands::workspace_links_add,
+            commands::workspace_links_delete,
+            commands::workspace_links_reorder,
+            commands::workspace_tasks_list,
+            commands::workspace_tasks_add,
+            commands::workspace_tasks_toggle,
+            commands::workspace_tasks_delete,
+            commands::workspace_tasks_reorder,
+            commands::workspace_pomodoro_get,
+            commands::workspace_pomodoro_start,
+            commands::workspace_pomodoro_pause,
+            commands::workspace_pomodoro_resume,
+            commands::workspace_pomodoro_reset,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
