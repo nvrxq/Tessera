@@ -1,5 +1,7 @@
 import { createResource, createSignal, onCleanup, onMount, Show, type Component } from "solid-js";
-import { message } from "@tauri-apps/plugin-dialog";
+import { ask, message } from "@tauri-apps/plugin-dialog";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { check as checkForAppUpdate } from "@tauri-apps/plugin-updater";
 import Sidebar from "./Sidebar";
 import NewWorkspaceForm from "./NewWorkspaceForm";
 import ProjectsSettings from "./ProjectsSettings";
@@ -65,6 +67,33 @@ const App: Component = () => {
 
   let unlistenStatus: (() => void) | null = null;
   let unlistenWorktree: (() => void) | null = null;
+
+  // Background update check — fire-and-forget so a slow/missing endpoint
+  // never delays first paint. Plugin-updater verifies the minisign
+  // signature against the public key in tauri.conf.json before installing.
+  void (async () => {
+    try {
+      const update = await checkForAppUpdate();
+      if (!update?.available) return;
+      const ok = await ask(
+        `A new version of Tessera is available.\n\nCurrent: ${update.currentVersion}\nLatest:  ${update.version}\n\n${update.body ?? ""}`,
+        {
+          title: "Tessera update",
+          kind: "info",
+          okLabel: "Install & relaunch",
+          cancelLabel: "Later",
+        },
+      );
+      if (!ok) return;
+      await update.downloadAndInstall();
+      await relaunch();
+    } catch (e) {
+      // Dev / unsigned / network-down — quietly ignore so the app still
+      // boots. Real users get an alert only when an update exists.
+      console.warn("update check failed", e);
+    }
+  })();
+
   onMount(async () => {
     unlistenStatus = await onWorkspaceStatus((evt) => {
       mutate((list) =>

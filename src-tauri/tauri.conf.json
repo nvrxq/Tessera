@@ -26,6 +26,17 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": ["icons/icon.png"]
+    "icon": ["icons/icon.png"],
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/nvrxq/Tessera/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDM2NDA5OTNBNTgwOUM2MkQKUldRdHhnbFlPcGxBTnRRLzM5cXRIdlQ4S21DZ0IzUnhjZFhaMDdBd2I1V255TkhHbGxZMXNSaG8K"
+    }
   }
 }

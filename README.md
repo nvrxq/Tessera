@@ -11,7 +11,28 @@ they form the picture.
 > session resume (`--continue`), and per-workspace claude PTY are working.
 > Diff viewer, desktop notifications, and packaging-by-CI are not yet.
 
-## Quick start
+## Install
+
+One-liner — installs the latest release for your OS+arch (macOS arm64/x64,
+Linux x64):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nvrxq/Tessera/main/install.sh | sh
+```
+
+- **macOS**: downloads the `.dmg`, copies `Tessera.app` to `/Applications`,
+  and strips Gatekeeper quarantine (the binary isn't Apple-notarised; right-click
+  → Open the first time if your security settings still block it).
+- **Linux**: drops a single-file `.AppImage` into `~/.local/bin/tessera`.
+
+Already installed? Re-running the script upgrades in place. Or just leave
+the app open — the in-app **auto-updater** checks GitHub Releases on every
+launch and prompts you to install + relaunch when a new signed version is
+available. Update payloads are minisign-signed against the public key
+embedded in the binary; an attacker on your network can't push a fake
+update.
+
+## Build from source
 
 ```bash
 git clone https://github.com/nvrxq/Tessera.git
@@ -21,7 +42,7 @@ cd Tessera
 ```
 
 The build script checks prerequisites, builds the UI, and produces a single
-self-contained binary at `target/release/tessera` (~9MB).
+self-contained binary at `target/release/tessera` (~12MB).
 
 ### Prerequisites
 
@@ -139,6 +160,37 @@ Full spec: [docs/superpowers/specs/2026-05-24-superset-linux-rust-design.md](doc
 ```bash
 cargo test --workspace
 ```
+
+## Releasing (maintainer)
+
+Releases are tag-driven. Pushing `v*` triggers `.github/workflows/release.yml`,
+which builds `.dmg` (macOS arm64 + x64) and `.AppImage` (Linux x64) via
+`tauri-action`, signs them with the minisign key, and publishes a GitHub
+Release plus the `latest.json` manifest the in-app updater reads.
+
+One-time setup before the first release:
+
+1. Generate the minisign keypair locally:
+   ```bash
+   cargo tauri signer generate -w ~/.tauri/tessera.key
+   ```
+   The public key gets pasted into `src-tauri/tauri.conf.json` under
+   `plugins.updater.pubkey`. Keep the private key secret.
+2. Add two repo secrets at Settings → Secrets and variables → Actions:
+   - `TAURI_SIGNING_PRIVATE_KEY` — contents of `~/.tauri/tessera.key`
+   - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — the password you set (empty
+     string if you opted out)
+
+Cutting a release:
+
+```bash
+# bump version in Cargo.toml workspace.package.version and src-tauri/tauri.conf.json
+git commit -am "release: v0.1.0"
+git tag v0.1.0
+git push origin main v0.1.0
+```
+
+CI takes ~15 minutes. Watch progress under the repo's Actions tab.
 
 ## License
 
