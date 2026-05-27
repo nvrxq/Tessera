@@ -5,6 +5,7 @@ import {
   onMount,
   Show,
   type Component,
+  type JSX,
 } from "solid-js";
 import {
   DEFAULT_ANSI_PALETTE,
@@ -468,7 +469,7 @@ const BehaviorSection: Component<{ draft: UserConfig; patch: Patch }> = (p) => (
 
 // ── Atoms ──────────────────────────────────────────────────────────────────
 
-const Field: Component<{ label: string; children?: unknown }> = (p) => (
+const Field: Component<{ label: string; children?: JSX.Element }> = (p) => (
   <label class="settings-field">
     <Show when={p.label}>
       <span class="settings-field-label">{p.label}</span>

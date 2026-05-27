@@ -21,6 +21,7 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 /// Bump when an incompatible change is made (e.g. a field removed or
 /// renamed). Older readers can refuse to load or migrate as appropriate.
@@ -30,9 +31,14 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// Hex colour string of the form `#RRGGBB`. Stored as a `String` for the
 /// wire/serde shape; deserialisation rejects anything that isn't a
 /// 7-char hash-prefixed hex triplet.
+///
+/// The inner field is private so a `HexColor` can only be built via
+/// `new`/`from_str`/serde deserialisation — all of which run the
+/// `is_valid_hex` check. That guarantee lets downstream parsers
+/// (`parse_hex` in the Tauri layer) skip re-validation safely.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
-pub struct HexColor(pub String);
+pub struct HexColor(String);
 
 impl HexColor {
     pub fn new(s: impl Into<String>) -> Result<Self, String> {
@@ -46,6 +52,14 @@ impl HexColor {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl FromStr for HexColor {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        HexColor::new(s)
     }
 }
 
@@ -143,15 +157,15 @@ fn default_font_size_px() -> u16 {
 }
 
 fn default_term_bg() -> HexColor {
-    HexColor("#0F0F10".to_string())
+    HexColor::new("#0F0F10").expect("static default hex is valid")
 }
 
 fn default_term_fg() -> HexColor {
-    HexColor("#E8E8E6".to_string())
+    HexColor::new("#E8E8E6").expect("static default hex is valid")
 }
 
 fn default_cursor_color() -> HexColor {
-    HexColor("#E8E8E6".to_string())
+    HexColor::new("#E8E8E6").expect("static default hex is valid")
 }
 
 /// The standard xterm 16 (matches `tessera_term::palette::tessera_dark`'s
@@ -176,7 +190,7 @@ pub fn default_ansi_palette() -> Vec<HexColor> {
         "#FFFFFF", // 15 bright white
     ]
     .iter()
-    .map(|s| HexColor(s.to_string()))
+    .map(|s| HexColor::new(*s).expect("static palette entries are valid"))
     .collect()
 }
 
@@ -282,21 +296,40 @@ impl UserConfig {
     }
 
     /// Atomically write the config to `path`. Creates parent directories
-    /// as needed. Atomic = write to `path.tmp` and rename — guarantees a
-    /// torn write (power loss, kill -9 mid-flush) never corrupts the
-    /// real file.
+    /// as needed.
+    ///
+    /// Atomicity guarantees:
+    ///   1. The payload is written to a uniquely-named temp file in the
+    ///      same directory (via `tempfile::NamedTempFile::new_in`), so
+    ///      two concurrent `save` calls can't race on a shared
+    ///      `*.json.tmp` name.
+    ///   2. The temp file is fsynced before the rename, so a power loss
+    ///      mid-write never leaves a torn payload as the live file.
+    ///   3. After `persist`, the parent directory itself is fsynced so
+    ///      the rename's directory entry is durable on Linux — without
+    ///      this, a crash can roll back the rename and lose the save
+    ///      even though the data file is on disk.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let tmp = path.with_extension("json.tmp");
+        let parent = match path.parent() {
+            Some(p) if !p.as_os_str().is_empty() => {
+                std::fs::create_dir_all(p)?;
+                p
+            }
+            // No parent component (e.g. `settings.json` with no dir) —
+            // fall back to the current working directory for the temp
+            // file and the dir fsync.
+            _ => Path::new("."),
+        };
         let json = serde_json::to_vec_pretty(self).map_err(std::io::Error::other)?;
-        {
-            let mut f = std::fs::File::create(&tmp)?;
-            f.write_all(&json)?;
-            f.sync_all()?;
-        }
-        std::fs::rename(&tmp, path)?;
+        let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
+        tmp.write_all(&json)?;
+        tmp.as_file().sync_all()?;
+        tmp.persist(path).map_err(|e| e.error)?;
+        // Fsync the parent directory so the rename's dirent is durable.
+        // Some filesystems (e.g. ext4 with data=ordered + power loss)
+        // can otherwise replay the rename in a way that drops it.
+        let dir = std::fs::OpenOptions::new().read(true).open(parent)?;
+        dir.sync_all()?;
         Ok(())
     }
 }
