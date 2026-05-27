@@ -267,20 +267,25 @@ export default function Terminal(props: TerminalProps) {
   function paintSelectionOverlay(ctx: CanvasRenderingContext2D) {
     const r = selectionRange();
     if (!r || gridCols === 0 || gridRows === 0) return;
-    ctx.fillStyle = "rgba(110, 160, 220, 0.32)";
-    const startRow = Math.max(0, Math.min(gridRows - 1, r.a.row));
-    const endRow = Math.max(0, Math.min(gridRows - 1, r.b.row));
-    if (endRow < startRow) return;
-    for (let row = startRow; row <= endRow; row++) {
-      let startCol = row === r.a.row ? r.a.col : 0;
-      let endCol = row === r.b.row ? r.b.col : gridCols - 1;
-      startCol = Math.max(0, Math.min(gridCols - 1, startCol));
-      endCol = Math.max(0, Math.min(gridCols - 1, endCol));
-      if (endCol < startCol) continue;
-      const x = startCol * cellW;
-      const y = row * cellH;
-      const w = (endCol - startCol + 1) * cellW;
-      ctx.fillRect(x, y, w, cellH);
+    ctx.save();
+    try {
+      ctx.fillStyle = "rgba(110, 160, 220, 0.32)";
+      const startRow = Math.max(0, Math.min(gridRows - 1, r.a.row));
+      const endRow = Math.max(0, Math.min(gridRows - 1, r.b.row));
+      if (endRow < startRow) return;
+      for (let row = startRow; row <= endRow; row++) {
+        let startCol = row === r.a.row ? r.a.col : 0;
+        let endCol = row === r.b.row ? r.b.col : gridCols - 1;
+        startCol = Math.max(0, Math.min(gridCols - 1, startCol));
+        endCol = Math.max(0, Math.min(gridCols - 1, endCol));
+        if (endCol < startCol) continue;
+        const x = startCol * cellW;
+        const y = row * cellH;
+        const w = (endCol - startCol + 1) * cellW;
+        ctx.fillRect(x, y, w, cellH);
+      }
+    } finally {
+      ctx.restore();
     }
   }
 
@@ -348,7 +353,7 @@ export default function Terminal(props: TerminalProps) {
         ? m.actualBoundingBoxDescent
         : px * 0.2;
     cellH = Math.max(1, Math.ceil((ascent + descent) * 1.25));
-    baseline = Math.floor(cellH - descent - (cellH - ascent - descent) * 0.5);
+    baseline = Math.round(cellH - descent - (cellH - ascent - descent) * 0.5);
     fontMetricsCache.set(key, { cellW, cellH, baseline });
   }
 
@@ -399,10 +404,10 @@ export default function Terminal(props: TerminalProps) {
   function paintCell(ctx: CanvasRenderingContext2D, idx: number, px: number) {
     const cell = grid[idx];
     if (!cell) return;
-    const r = Math.floor(idx / gridCols);
+    const r = (idx / gridCols) | 0;
     const c = idx - r * gridCols;
-    const x = c * cellW;
-    const y = r * cellH;
+    const x = (c * cellW) | 0;
+    const y = (r * cellH) | 0;
 
     ctx.fillStyle = hexColor(cell.b);
     ctx.fillRect(x, y, cellW, cellH);
@@ -416,7 +421,15 @@ export default function Terminal(props: TerminalProps) {
         `${px}px ${fontFamily}`;
       ctx.fillStyle = hexColor(cell.f);
       ctx.textBaseline = "alphabetic";
-      ctx.fillText(cell.c, x, y + baseline);
+      // Clip the glyph to its cell so antialiased halos from italics /
+      // descenders can't bleed into neighbouring cells and survive a
+      // future delta repaint as a stray pixel.
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x, y, cellW, cellH);
+      ctx.clip();
+      ctx.fillText(cell.c, x, (y + baseline) | 0);
+      ctx.restore();
 
       const thickness = Math.max(1, Math.round(px * 0.06));
       if (cell.a & 4) {
@@ -452,15 +465,19 @@ export default function Terminal(props: TerminalProps) {
     // Floor of 1 produced a 1-CSS-px bar at 14px that all but disappeared
     // against `#0F0F10` on a low-DPI display.
     const thick = Math.max(2, Math.round(px * 0.1));
-    ctx.fillStyle = cursorColorHex;
-    if (shape === "block") {
-      ctx.globalAlpha = 0.6;
-      ctx.fillRect(x, y, cellW, cellH);
-      ctx.globalAlpha = 1.0;
-    } else if (shape === "underline") {
-      ctx.fillRect(x, y + cellH - thick, cellW, thick);
-    } else {
-      ctx.fillRect(x, y, thick, cellH);
+    ctx.save();
+    try {
+      ctx.fillStyle = cursorColorHex;
+      if (shape === "block") {
+        ctx.globalAlpha = 0.6;
+        ctx.fillRect(x, y, cellW, cellH);
+      } else if (shape === "underline") {
+        ctx.fillRect(x, y + cellH - thick, cellW, thick);
+      } else {
+        ctx.fillRect(x, y, thick, cellH);
+      }
+    } finally {
+      ctx.restore();
     }
     return true;
   }

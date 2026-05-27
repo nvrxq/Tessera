@@ -196,7 +196,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
         <div class="workspace-meta">
           <div class="workspace-name">
             <ClaudeMark />
-            <span class="workspace-name-text">{ws.name}</span>
+            <span class="workspace-name-text" title={ws.name}>{ws.name}</span>
             <Show when={project}>
               {(p) => (
                 <span
