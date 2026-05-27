@@ -14,6 +14,7 @@ import Sidebar from "./Sidebar";
 import NewWorkspaceForm from "./NewWorkspaceForm";
 import ProjectsSettings from "./ProjectsSettings";
 import SettingsModal from "./SettingsModal";
+import ClaudeInventoryModal from "./ClaudeInventoryModal";
 import Terminal from "./Terminal";
 import WorkspaceExtrasPanel from "./WorkspaceExtrasPanel";
 import {
@@ -91,6 +92,7 @@ const App: Component = () => {
     });
   };
   const [showSettings, setShowSettings] = createSignal(false);
+  const [showInventory, setShowInventory] = createSignal(false);
   const clock = useClock();
   const [theme, setTheme] = createSignal<Theme>(initialTheme());
   applyTheme(theme());
@@ -389,6 +391,30 @@ const App: Component = () => {
             <button
               type="button"
               class="topmeta-mode"
+              onClick={() => setShowInventory(true)}
+              title="Claude inventory (skills + MCP)"
+              aria-label="Open Claude inventory"
+            >
+              {/* Sparkles-on-a-page: a stand-in for "everything Claude
+                  will see on launch" — skills + MCP servers, the surfaces
+                  the agent reads at boot. */}
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true">
+                <path
+                  d="M6 3h9l4 4v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linejoin="round"
+                />
+                <path d="M15 3v4h4" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
+                <path
+                  d="M11.5 11l.7 1.7 1.8.4-1.4 1.2.4 1.8-1.5-1-1.5 1 .4-1.8L9 13.1l1.8-.4.7-1.7z"
+                  fill="currentColor"
+                />
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="topmeta-mode"
               onClick={() => setShowSettings(true)}
               title="Settings"
               aria-label="Open settings"
@@ -491,6 +517,13 @@ const App: Component = () => {
       </Show>
       <Show when={showSettings()}>
         <SettingsModal onClose={() => setShowSettings(false)} />
+      </Show>
+      <Show when={showInventory()}>
+        <ClaudeInventoryModal
+          workspaceId={selected()?.id ?? null}
+          workspaceLabel={selected()?.name ?? null}
+          onClose={() => setShowInventory(false)}
+        />
       </Show>
     </div>
   );

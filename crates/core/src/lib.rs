@@ -1,11 +1,13 @@
 //! Domain types shared across the app.
 
+pub mod claude;
 pub mod config;
 pub mod error;
 pub mod extras;
 pub mod session;
 pub mod workspace;
 
+pub use claude::{ClaudeInventory, McpServer, McpSource, Skill, SkillSource};
 pub use config::{
     config_path, AppearanceConfig, BehaviorConfig, CursorShape, Density, HexColor, TerminalConfig,
     UserConfig, SCHEMA_VERSION,
