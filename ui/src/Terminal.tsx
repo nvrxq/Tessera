@@ -1256,6 +1256,28 @@ export default function Terminal(props: TerminalProps) {
   };
 
   // ── Pointer-driven text selection ──
+  // selMode tracks whether the current drag started as a cell/word/line
+  // selection. Word and line modes snap the moving endpoint to word/line
+  // boundaries instead of single cells, matching iTerm/Terminal.app.
+  let selMode: "cell" | "word" | "line" = "cell";
+  let selAnchorRow = 0;
+
+  /** Maximal run of non-whitespace cells on `row` that contains `col`,
+   *  bounded by ` ` cells. If the cell at `col` is itself whitespace,
+   *  the run is just that one cell — same as a double-click on a space
+   *  in Terminal.app. */
+  const wordBoundsAt = (col: number, row: number): { start: CellPos; end: CellPos } => {
+    if (gridCols === 0) return { start: { col, row }, end: { col, row } };
+    const at = (c: number) => grid[row * gridCols + c]?.c ?? " ";
+    const isWord = (c: number) => at(c) !== " ";
+    if (!isWord(col)) return { start: { col, row }, end: { col, row } };
+    let l = col;
+    while (l > 0 && isWord(l - 1)) l--;
+    let r = col;
+    while (r < gridCols - 1 && isWord(r + 1)) r++;
+    return { start: { col: l, row }, end: { col: r, row } };
+  };
+
   const onPointerDown = (ev: PointerEvent) => {
     if (ev.button !== 0) return; // left button only
     // Cache the canvas rect for the lifetime of this drag — `cellAtClient`
@@ -1267,8 +1289,25 @@ export default function Terminal(props: TerminalProps) {
       dragRect = null;
       return;
     }
-    selStart = cell;
-    selEnd = cell;
+    // MouseEvent.detail: 2 → second click in a row, 3 → third. Browsers
+    // already enforce the spatial/temporal "same click" gate, so we trust
+    // it for word/line selection without our own timing logic.
+    if (ev.detail >= 3) {
+      selMode = "line";
+      selAnchorRow = cell.row;
+      selStart = { col: 0, row: cell.row };
+      selEnd = { col: Math.max(0, gridCols - 1), row: cell.row };
+    } else if (ev.detail === 2) {
+      const { start, end } = wordBoundsAt(cell.col, cell.row);
+      selMode = "word";
+      selAnchorRow = cell.row;
+      selStart = start;
+      selEnd = end;
+    } else {
+      selMode = "cell";
+      selStart = cell;
+      selEnd = cell;
+    }
     selDragging = true;
     try {
       canvas.setPointerCapture(ev.pointerId);
@@ -1282,6 +1321,41 @@ export default function Terminal(props: TerminalProps) {
     if (!selDragging) return;
     const cell = cellAtClient(ev.clientX, ev.clientY);
     if (!cell) return;
+    if (selMode === "line") {
+      // Drag-extend in line mode covers whole rows from the anchor.
+      const fromRow = Math.min(selAnchorRow, cell.row);
+      const toRow = Math.max(selAnchorRow, cell.row);
+      const next = {
+        start: { col: 0, row: fromRow },
+        end: { col: Math.max(0, gridCols - 1), row: toRow },
+      };
+      if (
+        selStart && selEnd &&
+        selStart.row === next.start.row && selStart.col === next.start.col &&
+        selEnd.row === next.end.row && selEnd.col === next.end.col
+      ) {
+        return;
+      }
+      selStart = next.start;
+      selEnd = next.end;
+      scheduleSelectionRepaint();
+      return;
+    }
+    if (selMode === "word") {
+      // Snap the moving end to the word boundary at the pointer's cell.
+      // The anchor stays whichever side started lower (in reading order).
+      const movedWord = wordBoundsAt(cell.col, cell.row);
+      if (!selStart) return;
+      const anchorStart = selStart;
+      const beforeAnchor =
+        cell.row < anchorStart.row ||
+        (cell.row === anchorStart.row && cell.col < anchorStart.col);
+      const nextEnd = beforeAnchor ? movedWord.start : movedWord.end;
+      if (selEnd && nextEnd.col === selEnd.col && nextEnd.row === selEnd.row) return;
+      selEnd = nextEnd;
+      scheduleSelectionRepaint();
+      return;
+    }
     if (selEnd && cell.col === selEnd.col && cell.row === selEnd.row) return;
     selEnd = cell;
     scheduleSelectionRepaint();

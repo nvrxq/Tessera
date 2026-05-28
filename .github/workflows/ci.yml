@@ -43,6 +43,26 @@ jobs:
       - name: install
         working-directory: ui
         run: bun install --frozen-lockfile
+      - name: test
+        working-directory: ui
+        run: bun run test
       - name: build
         working-directory: ui
         run: bun run build
+
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # `rustsec/audit-check` only needs Cargo.lock; we don't need rustup.
+      - name: cargo audit (RustSec advisories)
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      # cargo-deny enforces the deny.toml license allow-list + advisory
+      # policy. `check advisories licenses` covers what we care about
+      # without the heavier bans/sources sections.
+      - name: cargo deny (advisories + licenses)
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories licenses

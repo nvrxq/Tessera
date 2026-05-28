@@ -27,15 +27,22 @@ export interface WorkspaceTask {
 
 export type PomodoroMode = "idle" | "work" | "break" | "paused";
 
-export interface PomodoroState {
+export type ActivityKind = "post_tool_use" | "stop" | "notification";
+
+export interface ActivityEntry {
+  id: string;
   workspace_id: string;
-  mode: PomodoroMode;
-  started_at: string | null;
-  paused_at: string | null;
-  target_seconds: number;
-  elapsed_seconds_before_pause: number;
-  cycles_completed: number;
-  updated_at: string;
+  kind: ActivityKind;
+  summary: string;
+  payload: string;
+  created_at: string;
+}
+
+export function workspaceActivityList(
+  workspaceId: string,
+  limit: number = 50,
+): Promise<ActivityEntry[]> {
+  return invoke<ActivityEntry[]>("workspace_activity_list", { workspaceId, limit });
 }
 
 // ---- links ----
@@ -100,50 +107,7 @@ export function workspaceTasksReorder(ids: string[]): Promise<void> {
   return invoke<void>("workspace_tasks_reorder", { ids });
 }
 
-// ---- pomodoro ----
-
-export function workspacePomodoroGet(workspaceId: string): Promise<PomodoroState> {
-  return invoke<PomodoroState>("workspace_pomodoro_get", { workspaceId });
-}
-
-export function workspacePomodoroStart(
-  workspaceId: string,
-  mode: "work" | "break",
-  targetSeconds?: number | null,
-): Promise<PomodoroState> {
-  return invoke<PomodoroState>("workspace_pomodoro_start", {
-    workspaceId,
-    mode,
-    targetSeconds: targetSeconds ?? null,
-  });
-}
-
-export function workspacePomodoroPause(workspaceId: string): Promise<PomodoroState> {
-  return invoke<PomodoroState>("workspace_pomodoro_pause", { workspaceId });
-}
-
-export function workspacePomodoroResume(workspaceId: string): Promise<PomodoroState> {
-  return invoke<PomodoroState>("workspace_pomodoro_resume", { workspaceId });
-}
-
-export function workspacePomodoroReset(workspaceId: string): Promise<PomodoroState> {
-  return invoke<PomodoroState>("workspace_pomodoro_reset", { workspaceId });
-}
-
 // ---- helpers ----
-
-/** Compute the remaining seconds for a Pomodoro state, given the current time. */
-export function pomodoroRemainingSeconds(state: PomodoroState, nowMs: number): number {
-  if (state.mode === "idle") return state.target_seconds;
-  if (state.mode === "paused") {
-    return Math.max(0, state.target_seconds - state.elapsed_seconds_before_pause);
-  }
-  // work / break
-  if (!state.started_at) return state.target_seconds;
-  const startedMs = new Date(state.started_at).getTime();
-  const elapsed = Math.max(0, Math.floor((nowMs - startedMs) / 1000));
-  return Math.max(0, state.target_seconds - elapsed);
-}
 
 export function formatMmSs(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));

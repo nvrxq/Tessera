@@ -7,14 +7,12 @@ members = [
     "crates/pty",
     "crates/workspace",
     "crates/hook",
-    "crates/overlay",
-    "crates/render",
     "crates/term",
     "src-tauri",
 ]
 
 [workspace.package]
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/nvrxq/Tessera"

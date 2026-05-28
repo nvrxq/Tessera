@@ -8,7 +8,7 @@ export interface WorkspaceDto {
   name: string;
   repo_path: string;
   worktree_path: string;
-  setup_status: { kind: "pending" | "running" | "ok" | "failed"; stderr_tail?: string };
+  setup_status: { kind: "pending" | "running" | "ok" };
   created_at: string;
   detected_worktree: string | null;
   detected_branch: string | null;
@@ -122,8 +122,12 @@ export function spawnAgent(
   return p;
 }
 
-export function deleteWorkspace(workspaceId: string, force: boolean): Promise<void> {
-  return invoke<void>("workspace_delete", { workspaceId, force });
+export function deleteWorkspace(workspaceId: string): Promise<void> {
+  return invoke<void>("workspace_delete", { workspaceId });
+}
+
+export function renameWorkspace(workspaceId: string, newName: string): Promise<void> {
+  return invoke<void>("workspace_rename", { workspaceId, newName });
 }
 
 export function listDirectories(input: string): Promise<string[]> {

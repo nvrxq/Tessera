@@ -1,5 +1,6 @@
 //! Domain types shared across the app.
 
+pub mod activity;
 pub mod claude;
 pub mod config;
 pub mod error;
@@ -7,6 +8,7 @@ pub mod extras;
 pub mod session;
 pub mod workspace;
 
+pub use activity::{ActivityEntry, ActivityKind};
 pub use claude::{ClaudeInventory, McpServer, McpSource, Skill, SkillSource};
 pub use config::{
     config_path, AppearanceConfig, BehaviorConfig, CursorShape, Density, HexColor, TerminalConfig,
@@ -45,15 +47,6 @@ mod tests {
         let back: Workspace = serde_json::from_str(&j).unwrap();
         assert_eq!(back.id, ws.id);
         assert_eq!(back.branch, ws.branch);
-    }
-
-    #[test]
-    fn setup_status_failed_carries_message() {
-        let s = SetupStatus::Failed {
-            stderr_tail: "boom\n".into(),
-        };
-        let j = serde_json::to_string(&s).unwrap();
-        assert!(j.contains("boom"));
     }
 
     #[test]

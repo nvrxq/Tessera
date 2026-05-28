@@ -1,7 +1,7 @@
 //! `GridCell` — a flat, ready-to-render representation of one terminal cell.
 
+use crate::color::Color;
 use crate::palette::ColorPalette;
-use tessera_render::geometry::Color;
 use unicode_normalization::UnicodeNormalization;
 use wezterm_term::Cell as WezCell;
 

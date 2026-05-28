@@ -9,7 +9,6 @@ pub enum SetupStatus {
     Pending,
     Running,
     Ok,
-    Failed { stderr_tail: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,6 +17,9 @@ pub struct Workspace {
     pub name: String,
     pub repo_path: PathBuf,
     pub worktree_path: PathBuf,
+    /// Legacy field — always empty in the Plan-5 worktree-less model.
+    /// Kept on the struct only because the DB schema still has the column
+    /// (and SQLite column drops are painful). Don't read this anywhere new.
     pub branch: String,
     pub created_at: DateTime<Utc>,
     pub setup_status: SetupStatus,

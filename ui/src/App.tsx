@@ -41,6 +41,7 @@ import {
   listWorkspaces,
   onWorkspaceStatus,
   onWorkspaceWorktree,
+  renameWorkspace,
   spawnAgent,
   workspaceAssignProject,
   workspaceReorder,
@@ -63,17 +64,6 @@ function useClock() {
     const mm = String(d.getMinutes()).padStart(2, "0");
     return `${hh}:${mm}`;
   };
-}
-
-type Theme = "dark" | "light";
-function initialTheme(): Theme {
-  const stored = localStorage.getItem("tessera.theme");
-  if (stored === "light" || stored === "dark") return stored;
-  return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
-}
-function applyTheme(t: Theme) {
-  document.documentElement.setAttribute("data-theme", t);
-  localStorage.setItem("tessera.theme", t);
 }
 
 const App: Component = () => {
@@ -102,13 +92,6 @@ const App: Component = () => {
   const [showSettings, setShowSettings] = createSignal(false);
   const [showInventory, setShowInventory] = createSignal(false);
   const clock = useClock();
-  const [theme, setTheme] = createSignal<Theme>(initialTheme());
-  applyTheme(theme());
-  const toggleTheme = () => {
-    const next: Theme = theme() === "dark" ? "light" : "dark";
-    setTheme(next);
-    applyTheme(next);
-  };
 
   let unlistenStatus: (() => void) | null = null;
   let unlistenWorktree: (() => void) | null = null;
@@ -264,10 +247,61 @@ const App: Component = () => {
       );
     });
   });
+  // Keyboard quick-switch. Mirrors the Sidebar's section + sort rule
+  // (active section first, then passive; each sorted by sort_order then
+  // created_at) so what the user sees in the sidebar is exactly the
+  // order Cmd/Ctrl + N walks. Skipped when focus is in a text input —
+  // those should keep typing normally.
+  const orderedWorkspaceList = (): WorkspaceDto[] => {
+    const all = workspaces() ?? [];
+    const active: WorkspaceDto[] = [];
+    const passive: WorkspaceDto[] = [];
+    for (const w of all) {
+      (w.session_id != null ? active : passive).push(w);
+    }
+    const cmp = (a: WorkspaceDto, b: WorkspaceDto) =>
+      a.sort_order !== b.sort_order
+        ? a.sort_order - b.sort_order
+        : a.created_at.localeCompare(b.created_at);
+    active.sort(cmp);
+    passive.sort(cmp);
+    return active.concat(passive);
+  };
+  const onGlobalKey = (e: KeyboardEvent) => {
+    if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+    const target = e.target as HTMLElement | null;
+    if (target) {
+      const tag = target.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || target.isContentEditable) {
+        return;
+      }
+    }
+    const list = orderedWorkspaceList();
+    if (list.length === 0) return;
+    if (e.key >= "1" && e.key <= "9") {
+      const idx = e.key.charCodeAt(0) - "1".charCodeAt(0);
+      if (idx >= list.length) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      onSelect(list[idx].id);
+      return;
+    }
+    if (e.key === "]" || e.key === "[") {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      const curIdx = list.findIndex((w) => w.id === selectedId());
+      const step = e.key === "]" ? 1 : -1;
+      const base = curIdx < 0 ? (step > 0 ? -1 : 0) : curIdx;
+      const next = ((base + step) % list.length + list.length) % list.length;
+      onSelect(list[next].id);
+    }
+  };
+  onMount(() => document.addEventListener("keydown", onGlobalKey, true));
   onCleanup(() => {
     unlistenStatus?.();
     unlistenWorktree?.();
     unlistenSettings?.();
+    document.removeEventListener("keydown", onGlobalKey, true);
   });
 
   const selected = () => workspaces()?.find((w) => w.id === selectedId()) ?? null;
@@ -394,9 +428,22 @@ const App: Component = () => {
     refetch();
   };
 
+  const onRename = async (id: string, newName: string) => {
+    mutate(
+      (list) =>
+        list?.map((w) => (w.id === id ? { ...w, name: newName } : w)) ?? list,
+    );
+    try {
+      await renameWorkspace(id, newName);
+    } catch (e) {
+      console.error("rename failed", e);
+      refetch();
+    }
+  };
+
   const onDelete = async (id: string) => {
     try {
-      await deleteWorkspace(id, true);
+      await deleteWorkspace(id);
       mutate((list) => list?.filter((w) => w.id !== id) ?? list);
       if (selectedId() === id) setSelectedId(null);
     } catch (e) {
@@ -425,11 +472,6 @@ const App: Component = () => {
               <span class="brand-name-tag">Agent orchestrator.</span>
             </span>
           </div>
-          <nav class="topnav">
-            <span class="topnav-item">Workspaces.</span>
-            <span class="topnav-item">Sessions.</span>
-            <span class="topnav-item">Hooks.</span>
-          </nav>
           <div class="topmeta">
             <button
               type="button"
@@ -546,15 +588,6 @@ const App: Component = () => {
                 <circle cx="8" cy="17" r="2.2" fill="currentColor" />
               </svg>
             </button>
-            <button
-              type="button"
-              class="topmeta-mode"
-              onClick={toggleTheme}
-              title={theme() === "dark" ? "Switch to light" : "Switch to dark"}
-              aria-label="Toggle theme"
-            >
-              {theme() === "dark" ? "☾" : "☀"}
-            </button>
           </div>
         </header>
 
@@ -568,6 +601,7 @@ const App: Component = () => {
             onNew={() => setShowNew(true)}
             onReorder={onReorder}
             onAssignProject={onAssignProject}
+            onRename={onRename}
           />
           <main class="main-pane">
             <Show when={showNew()}>

@@ -5,6 +5,7 @@
 
 pub mod blocks;
 pub mod cell;
+pub mod color;
 pub(crate) mod config;
 pub mod cursor;
 pub mod grid;
@@ -12,10 +13,10 @@ pub mod palette;
 pub mod term;
 pub use blocks::{Block, BlockEvent, BlockId, BlockSink};
 pub use cell::GridCell;
+pub use color::Color;
 pub use cursor::{CursorPos, CursorShape};
 pub use grid::Grid;
 pub use term::Term;
-pub use tessera_render::geometry::Color;
 
 pub fn crate_name() -> &'static str {
     "tessera-term"

@@ -20,6 +20,7 @@ export interface SidebarProps {
   onNew: () => void;
   onReorder: (section: SectionKey, orderedIds: string[]) => void;
   onAssignProject: (workspaceId: string, projectId: string | null) => void;
+  onRename: (workspaceId: string, newName: string) => void;
 }
 
 function statusClass(s: AgentStatus | null): string {
@@ -85,6 +86,9 @@ const Sidebar: Component<SidebarProps> = (props) => {
   // Single open popover at a time — `openMenuId` holds the workspace id
   // whose `⋯` menu is showing, or null. Outside-click handler closes it.
   const [openMenuId, setOpenMenuId] = createSignal<string | null>(null);
+  // Inline rename mode — id of the workspace whose name cell is currently
+  // an <input>. Only one at a time; Enter commits, Esc/blur cancels.
+  const [renamingId, setRenamingId] = createSignal<string | null>(null);
   const onDocClick = (e: MouseEvent) => {
     // Any click outside `.workspace-menu-wrap` closes the popover.
     const target = e.target as HTMLElement | null;
@@ -214,7 +218,44 @@ const Sidebar: Component<SidebarProps> = (props) => {
                 />
               )}
             </Show>
-            <span class="workspace-name-text" title={ws.name}>{ws.name}</span>
+            <Show
+              when={renamingId() === ws.id}
+              fallback={<span class="workspace-name-text" title={ws.name}>{ws.name}</span>}
+            >
+              <input
+                type="text"
+                class="workspace-name-input"
+                value={ws.name}
+                autofocus
+                draggable={false}
+                onMouseDown={(e) => e.stopPropagation()}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => e.stopPropagation()}
+                ref={(el) => {
+                  // select-all on open so the user can type a fresh name
+                  // immediately without hitting Cmd-A first.
+                  queueMicrotask(() => {
+                    el.focus();
+                    el.select();
+                  });
+                }}
+                onKeyDown={(e) => {
+                  e.stopPropagation();
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    const next = e.currentTarget.value.trim();
+                    if (next && next !== ws.name) {
+                      props.onRename(ws.id, next);
+                    }
+                    setRenamingId(null);
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    setRenamingId(null);
+                  }
+                }}
+                onBlur={() => setRenamingId(null)}
+              />
+            </Show>
             <Show when={ws.dangerous_skip_permissions}>
               <span class="dangerous-badge" title="--dangerously-skip-permissions">⚡</span>
             </Show>
@@ -250,6 +291,17 @@ const Sidebar: Component<SidebarProps> = (props) => {
           </button>
           <Show when={openMenuId() === ws.id}>
             <div class="workspace-menu-popover" role="menu">
+              <button
+                type="button"
+                class="workspace-menu-item"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setRenamingId(ws.id);
+                  setOpenMenuId(null);
+                }}
+              >
+                <span class="workspace-menu-item-label">Rename</span>
+              </button>
               <div class="workspace-menu-label">Project</div>
               <button
                 type="button"

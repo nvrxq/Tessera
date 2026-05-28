@@ -125,7 +125,17 @@ impl WorkspaceService {
         Ok(ws)
     }
 
-    pub fn delete(&self, workspace_id: Uuid, _force: bool) -> Result<()> {
+    /// Update the user-visible workspace name. Trimmed and validated to
+    /// be non-empty; everything else (project, ordering, sessions) is
+    /// untouched.
+    pub fn rename(&self, id: Uuid, new_name: &str) -> Result<()> {
+        let trimmed = new_name.trim();
+        anyhow::ensure!(!trimmed.is_empty(), "workspace name is required");
+        let conn = self.db.lock().unwrap();
+        tessera_store::workspaces::update_name(&conn, id, trimmed)
+    }
+
+    pub fn delete(&self, workspace_id: Uuid) -> Result<()> {
         let _ = {
             let conn = self.db.lock().unwrap();
             tessera_store::workspaces::get(&conn, workspace_id)?
@@ -447,16 +457,36 @@ mod tests {
         let folder = dir.path().join("any-folder");
         std::fs::create_dir_all(&folder).unwrap();
         let ws = svc.create(&folder, "x", false, None).unwrap();
-        svc.delete(ws.id, true).unwrap();
+        svc.delete(ws.id).unwrap();
         assert!(folder.exists(), "user folder must not be removed");
         assert!(svc.list().unwrap().is_empty());
         assert_eq!(svc.current_session(ws.id), None);
     }
 
     #[test]
+    fn rename_updates_name_and_rejects_empty() {
+        let (svc, dir) = make_service();
+        let folder = dir.path().join("any-folder");
+        std::fs::create_dir_all(&folder).unwrap();
+        let ws = svc.create(&folder, "old", false, None).unwrap();
+
+        svc.rename(ws.id, "  new name  ").unwrap();
+        let row = svc
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|w| w.id == ws.id)
+            .unwrap();
+        assert_eq!(row.name, "new name");
+
+        assert!(svc.rename(ws.id, "").is_err());
+        assert!(svc.rename(ws.id, "   ").is_err());
+    }
+
+    #[test]
     fn delete_unknown_workspace_errors() {
         let (svc, _dir) = make_service();
-        assert!(svc.delete(Uuid::new_v4(), true).is_err());
+        assert!(svc.delete(Uuid::new_v4()).is_err());
     }
 
     #[test]

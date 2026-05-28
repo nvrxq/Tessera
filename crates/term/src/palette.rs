@@ -1,4 +1,4 @@
-//! Maps `wezterm_term::ColorAttribute` → `tessera_render::Color`.
+//! Maps `wezterm_term::ColorAttribute` → `Color`.
 //!
 //! - Default fg/bg come from the Tessera DESIGN.md palette.
 //! - PaletteIndex 0..15 are the xterm 16-color names.
@@ -6,7 +6,7 @@
 //! - PaletteIndex 232..255 are the xterm grayscale ramp.
 //! - TrueColor passes through verbatim.
 
-use tessera_render::geometry::Color;
+use crate::color::Color;
 use wezterm_term::color::ColorAttribute;
 
 #[derive(Debug, Clone)]

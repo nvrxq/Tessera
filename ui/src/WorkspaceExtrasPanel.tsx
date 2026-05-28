@@ -7,6 +7,7 @@ import {
 } from "solid-js";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
+  workspaceActivityList,
   workspaceLinksAdd,
   workspaceLinksDelete,
   workspaceLinksList,
@@ -14,6 +15,8 @@ import {
   workspaceTasksDelete,
   workspaceTasksList,
   workspaceTasksToggle,
+  type ActivityEntry,
+  type ActivityKind,
   type WorkspaceLink,
   type WorkspaceTask,
 } from "./lib/extras";
@@ -23,11 +26,12 @@ export interface WorkspaceExtrasPanelProps {
   onClose: () => void;
 }
 
-type Tab = "links" | "tasks";
+type Tab = "links" | "tasks" | "activity";
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "links", label: "Links" },
   { id: "tasks", label: "Tasks" },
+  { id: "activity", label: "Activity" },
 ];
 
 // Per-workspace storage of the last-selected tab. Pre-global-pomodoro
@@ -36,7 +40,8 @@ const TABS: Array<{ id: Tab; label: string }> = [
 const tabKey = (id: string) => `tessera.extrasTab:${id}`;
 function readStoredTab(id: string): Tab {
   const v = localStorage.getItem(tabKey(id));
-  return v === "tasks" ? "tasks" : "links";
+  if (v === "tasks" || v === "activity") return v;
+  return "links";
 }
 
 const WorkspaceExtrasPanel: Component<WorkspaceExtrasPanelProps> = (props) => {
@@ -83,8 +88,59 @@ const WorkspaceExtrasPanel: Component<WorkspaceExtrasPanelProps> = (props) => {
         <Show when={tab() === "tasks"}>
           <TasksTab workspaceId={props.workspaceId} />
         </Show>
+        <Show when={tab() === "activity"}>
+          <ActivityTab workspaceId={props.workspaceId} />
+        </Show>
       </div>
     </aside>
+  );
+};
+
+// ---- Activity ----
+
+const ACTIVITY_KIND_LABEL: Record<ActivityKind, string> = {
+  post_tool_use: "tool",
+  stop: "stop",
+  notification: "notify",
+};
+
+function formatActivityTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
+const ActivityTab: Component<{ workspaceId: string }> = (props) => {
+  // Read-only view. We re-fetch when the workspace switches; live updates
+  // can land in a follow-up once we wire a `workspace_activity` event.
+  const [entries] = createResource(
+    () => props.workspaceId,
+    (id) => workspaceActivityList(id, 50),
+  );
+
+  return (
+    <div class="extras-tab-body">
+      <Show
+        when={(entries() ?? []).length > 0}
+        fallback={<EmptyState message="No activity yet. Hook events will appear here." />}
+      >
+        <ul class="extras-activity-list">
+          <For each={entries() ?? []}>
+            {(e: ActivityEntry) => (
+              <li class="extras-activity-row">
+                <span class="extras-activity-time">{formatActivityTime(e.created_at)}</span>
+                <span class={`extras-activity-kind extras-activity-kind--${e.kind}`}>
+                  {ACTIVITY_KIND_LABEL[e.kind] ?? e.kind}
+                </span>
+                <span class="extras-activity-summary" title={e.payload}>{e.summary}</span>
+              </li>
+            )}
+          </For>
+        </ul>
+      </Show>
+    </div>
   );
 };
 

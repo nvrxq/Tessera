@@ -2,8 +2,8 @@ mod commands;
 mod terminal;
 
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter};
-use tessera_core::AgentStatus;
+use tauri::{AppHandle, Emitter, Manager};
+use tessera_core::{ActivityEntry, ActivityKind, AgentStatus};
 use tessera_hook::{HookEvent, HookKind, Listener};
 use tessera_pty::{PtyEvent, Supervisor};
 use tessera_workspace::WorkspaceService;
@@ -67,11 +67,23 @@ pub fn run() {
     let socket_path = data_dir.join("hooks.sock");
 
     tauri::Builder::default()
+        // single-instance must register first so the second invocation's
+        // closure fires inside the first process before any other plugin
+        // grabs resources (DB lock, hooks socket) the second copy would
+        // race on.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            use tauri::Manager;
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(supervisor.clone())
         .manage(workspace_service.clone())
         .manage(registry.clone())
@@ -128,18 +140,26 @@ pub fn run() {
                                     // Capture the FIRST byte-arrival in a
                                     // tick window; the emitter task reads
                                     // it back to compute end-to-end latency.
-                                    seen.lock()
-                                        .unwrap()
-                                        .entry(session_id)
-                                        .or_insert(t_recv);
-                                    dirty.lock().unwrap_or_else(|e| e.into_inner()).insert(session_id);
+                                    seen.lock().unwrap().entry(session_id).or_insert(t_recv);
+                                    dirty
+                                        .lock()
+                                        .unwrap_or_else(|e| e.into_inner())
+                                        .insert(session_id);
                                 }
                             }
                             PtyEvent::Exit { session_id } => {
                                 reg.remove(session_id);
-                                sizes.lock().unwrap_or_else(|e| e.into_inner()).remove(&session_id);
-                                dirty.lock().unwrap_or_else(|e| e.into_inner()).remove(&session_id);
-                                seen.lock().unwrap_or_else(|e| e.into_inner()).remove(&session_id);
+                                sizes
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .remove(&session_id);
+                                dirty
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .remove(&session_id);
+                                seen.lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .remove(&session_id);
                                 let _ = handle.emit(
                                     "pty_event",
                                     serde_json::json!({
@@ -158,12 +178,8 @@ pub fn run() {
                 let dirty = dirty.clone();
                 let seen = pty_seen_at.clone();
                 tauri::async_runtime::spawn(async move {
-                    let mut tick = tokio::time::interval(
-                        std::time::Duration::from_millis(1),
-                    );
-                    tick.set_missed_tick_behavior(
-                        tokio::time::MissedTickBehavior::Delay,
-                    );
+                    let mut tick = tokio::time::interval(std::time::Duration::from_millis(1));
+                    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                     loop {
                         tick.tick().await;
                         let to_snap: Vec<uuid::Uuid> = {
@@ -176,10 +192,7 @@ pub fn run() {
                             v
                         };
                         for sid in to_snap {
-                            let t_pty = seen
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner())
-                                .remove(&sid);
+                            let t_pty = seen.lock().unwrap_or_else(|e| e.into_inner()).remove(&sid);
                             let t_snap_start = std::time::Instant::now();
                             if let Some(snap) = reg.snapshot(sid) {
                                 let t_snap = t_snap_start.elapsed();
@@ -194,9 +207,8 @@ pub fn run() {
                                     // twice at different points so the
                                     // numbers drifted by ~µs and the row
                                     // didn't reconcile.
-                                    let total_us = t_pty
-                                        .map(|t| t.elapsed().as_micros())
-                                        .unwrap_or(0);
+                                    let total_us =
+                                        t_pty.map(|t| t.elapsed().as_micros()).unwrap_or(0);
                                     let wait_us = total_us
                                         .saturating_sub(t_snap.as_micros())
                                         .saturating_sub(t_emit.as_micros());
@@ -214,17 +226,52 @@ pub fn run() {
                 });
             }
 
-            // Hook listener (Plan 4).
+            // Hook listener (Plan 4). Bind can fail when a stale socket
+            // is held by a defunct previous run or when the data dir is
+            // briefly unavailable (network home dirs, etc.). Retry a
+            // handful of times with backoff, then emit a UI event so the
+            // user knows hooks are dead instead of suffering silent
+            // status-dot starvation.
             let svc = workspace_service.clone();
             tauri::async_runtime::spawn(async move {
-                match Listener::bind(&socket_path) {
-                    Ok(mut listener) => {
-                        tracing::info!(path = %listener.socket_path.display(), "hook listener bound");
-                        while let Some(evt) = listener.rx.recv().await {
-                            dispatch_hook(&handle, &svc, evt);
+                const MAX_ATTEMPTS: u32 = 5;
+                const BACKOFF: std::time::Duration = std::time::Duration::from_secs(2);
+                let mut listener: Option<Listener> = None;
+                let mut last_err: Option<String> = None;
+                for attempt in 1..=MAX_ATTEMPTS {
+                    match Listener::bind(&socket_path) {
+                        Ok(l) => {
+                            tracing::info!(
+                                path = %l.socket_path.display(),
+                                attempt,
+                                "hook listener bound",
+                            );
+                            let _ = handle
+                                .emit("hook_listener_state", serde_json::json!({ "status": "ok" }));
+                            listener = Some(l);
+                            break;
+                        }
+                        Err(e) => {
+                            let msg = e.to_string();
+                            tracing::warn!(error = %msg, attempt, "hook listener bind failed");
+                            last_err = Some(msg);
+                            if attempt < MAX_ATTEMPTS {
+                                tokio::time::sleep(BACKOFF).await;
+                            }
                         }
                     }
-                    Err(e) => tracing::error!(error = %e, "hook listener bind failed"),
+                }
+                let Some(mut listener) = listener else {
+                    let err = last_err.unwrap_or_else(|| "unknown".to_string());
+                    tracing::error!(error = %err, "hook listener gave up after retries");
+                    let _ = handle.emit(
+                        "hook_listener_state",
+                        serde_json::json!({ "status": "down", "error": err }),
+                    );
+                    return;
+                };
+                while let Some(evt) = listener.rx.recv().await {
+                    dispatch_hook(&handle, &svc, evt);
                 }
             });
 
@@ -240,6 +287,7 @@ pub fn run() {
             commands::workspace_list,
             commands::workspace_spawn_agent,
             commands::workspace_delete,
+            commands::workspace_rename,
             commands::project_create,
             commands::project_list,
             commands::project_delete,
@@ -258,11 +306,7 @@ pub fn run() {
             commands::workspace_tasks_toggle,
             commands::workspace_tasks_delete,
             commands::workspace_tasks_reorder,
-            commands::workspace_pomodoro_get,
-            commands::workspace_pomodoro_start,
-            commands::workspace_pomodoro_pause,
-            commands::workspace_pomodoro_resume,
-            commands::workspace_pomodoro_reset,
+            commands::workspace_activity_list,
             commands::app_pomodoro_get,
             commands::app_pomodoro_start,
             commands::app_pomodoro_pause,
@@ -498,6 +542,66 @@ fn dispatch_hook(app: &AppHandle, svc: &Arc<WorkspaceService>, evt: HookEvent) {
         }),
     );
 
+    // Persist the event to the activity log so the user can scroll it
+    // back in the workspace's Activity tab. Truncate the payload to 4 KB
+    // — Claude's tool_input.command can be very long, and the log is a
+    // human-readable trail, not an audit substrate.
+    let kind = match evt.kind {
+        HookKind::PostToolUse => ActivityKind::PostToolUse,
+        HookKind::Stop => ActivityKind::Stop,
+        HookKind::Notification => ActivityKind::Notification,
+    };
+    let summary = summarise_hook(&evt);
+    let mut payload_str = serde_json::to_string(&evt.payload).unwrap_or_default();
+    if payload_str.len() > 4096 {
+        payload_str.truncate(4096);
+    }
+    let entry = ActivityEntry {
+        id: uuid::Uuid::new_v4(),
+        workspace_id: evt.workspace_id,
+        kind,
+        summary,
+        payload: payload_str,
+        created_at: chrono::Utc::now(),
+    };
+    let db = app.state::<commands::DbState>();
+    {
+        let conn = db.lock().unwrap();
+        if let Err(e) = tessera_store::activity::insert(&conn, &entry) {
+            tracing::warn!(error = %e, "activity_log insert failed");
+        } else if let Err(e) = tessera_store::activity::prune_keep_n(&conn, evt.workspace_id, 200) {
+            tracing::warn!(error = %e, "activity_log prune failed");
+        }
+    }
+
+    // Surface NeedsInput / Done as OS notifications when the window is
+    // not focused. PostToolUse fires constantly (every tool call), so we
+    // don't notify on those — only the two states the user actually waits
+    // for. Window focus is best-effort; on failure assume "not focused".
+    if matches!(evt.kind, HookKind::Notification | HookKind::Stop) {
+        use tauri_plugin_notification::NotificationExt;
+        let focused = app
+            .get_webview_window("main")
+            .and_then(|w| w.is_focused().ok())
+            .unwrap_or(false);
+        if !focused {
+            let title = svc
+                .get(evt.workspace_id)
+                .ok()
+                .flatten()
+                .map(|w| w.name)
+                .unwrap_or_else(|| "Tessera".to_string());
+            let body = match evt.kind {
+                HookKind::Notification => "needs your input",
+                HookKind::Stop => "session ended",
+                _ => "",
+            };
+            if let Err(e) = app.notification().builder().title(title).body(body).show() {
+                tracing::warn!(error = %e, "notification show failed");
+            }
+        }
+    }
+
     if matches!(evt.kind, HookKind::PostToolUse) {
         let bash_command = evt
             .payload
@@ -528,6 +632,50 @@ fn dispatch_hook(app: &AppHandle, svc: &Arc<WorkspaceService>, evt: HookEvent) {
             }
         }
     }
+}
+
+/// Derive a short human-readable line from a hook event so the user can
+/// scan the Activity tab quickly. PostToolUse highlights the tool name
+/// (and Bash command for that one); Notification surfaces the message;
+/// Stop is a constant phrase. Always trimmed to 120 chars.
+fn summarise_hook(evt: &HookEvent) -> String {
+    let raw = match evt.kind {
+        HookKind::Stop => "session stopped".to_string(),
+        HookKind::Notification => evt
+            .payload
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("agent needs input")
+            .to_string(),
+        HookKind::PostToolUse => {
+            let tool = evt
+                .payload
+                .get("tool_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("tool");
+            if tool == "Bash" {
+                if let Some(cmd) = evt
+                    .payload
+                    .get("tool_input")
+                    .and_then(|ti| ti.get("command"))
+                    .and_then(|c| c.as_str())
+                {
+                    return truncate_120(&format!("Bash: {cmd}"));
+                }
+            }
+            tool.to_string()
+        }
+    };
+    truncate_120(&raw)
+}
+
+fn truncate_120(s: &str) -> String {
+    if s.chars().count() <= 120 {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(117).collect();
+    out.push_str("...");
+    out
 }
 
 /// CLI-side handler for `tessera hook <workspace_id> <kind>`. Reads stdin

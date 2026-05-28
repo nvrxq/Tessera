@@ -84,6 +84,15 @@ pub fn update_project(conn: &Connection, ws_id: Uuid, project_id: Option<Uuid>) 
     Ok(())
 }
 
+pub fn update_name(conn: &Connection, id: Uuid, new_name: &str) -> Result<()> {
+    let n = conn.execute(
+        "UPDATE workspaces SET name = ?1 WHERE id = ?2",
+        params![new_name, id.to_string()],
+    )?;
+    anyhow::ensure!(n == 1, "workspace {id} not found");
+    Ok(())
+}
+
 pub fn mark_session_started(conn: &Connection, id: Uuid) -> Result<()> {
     let n = conn.execute(
         "UPDATE workspaces SET has_prior_session = 1 WHERE id = ?1",
