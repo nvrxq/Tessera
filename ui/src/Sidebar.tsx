@@ -13,6 +13,10 @@ type SectionKey = "active" | "passive";
 
 export interface SidebarProps {
   workspaces: WorkspaceDto[];
+  /** Soft-archived workspaces, surfaced under a collapsible section at
+   *  the bottom of the sidebar. App fetches this list — Sidebar stays
+   *  presentational. */
+  archived: WorkspaceDto[];
   projects: Project[];
   selectedId: string | null;
   onSelect: (id: string) => void;
@@ -21,6 +25,13 @@ export interface SidebarProps {
   onReorder: (section: SectionKey, orderedIds: string[]) => void;
   onAssignProject: (workspaceId: string, projectId: string | null) => void;
   onRename: (workspaceId: string, newName: string) => void;
+  /** Soft-archive: hide from active list, keep row + pinned Claude
+   *  session. Triggered from the workspace menu. */
+  onArchive: (workspaceId: string) => void;
+  /** Bring an archived workspace back into the active list. */
+  onUnarchive: (workspaceId: string) => void;
+  /** Drop the pinned Claude session so the next spawn starts fresh. */
+  onResetSession: (workspaceId: string) => void;
 }
 
 function statusClass(s: AgentStatus | null): string {
@@ -89,6 +100,23 @@ const Sidebar: Component<SidebarProps> = (props) => {
   // Inline rename mode — id of the workspace whose name cell is currently
   // an <input>. Only one at a time; Enter commits, Esc/blur cancels.
   const [renamingId, setRenamingId] = createSignal<string | null>(null);
+  // Archive section is collapsed by default — keeps the active list as
+  // the primary focus, but one click away when the user wants to
+  // restore something. Persisted to localStorage so the choice
+  // survives reloads.
+  const archiveOpenKey = "tessera.sidebar.archive_open";
+  const [archiveOpen, setArchiveOpen] = createSignal<boolean>(
+    typeof localStorage !== "undefined" && localStorage.getItem(archiveOpenKey) === "1",
+  );
+  const toggleArchive = () => {
+    const next = !archiveOpen();
+    setArchiveOpen(next);
+    try {
+      localStorage.setItem(archiveOpenKey, next ? "1" : "0");
+    } catch {
+      /* localStorage can throw in privacy modes; ignore. */
+    }
+  };
   const onDocClick = (e: MouseEvent) => {
     // Any click outside `.workspace-menu-wrap` closes the popover.
     const target = e.target as HTMLElement | null;
@@ -302,6 +330,42 @@ const Sidebar: Component<SidebarProps> = (props) => {
               >
                 <span class="workspace-menu-item-label">Rename</span>
               </button>
+              <button
+                type="button"
+                class="workspace-menu-item"
+                title={
+                  ws.claude_session_id
+                    ? `Pinned to ${ws.claude_session_id.slice(0, 8)}…`
+                    : "No Claude session pinned yet"
+                }
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  setOpenMenuId(null);
+                  const ok = await ask(
+                    `Reset Claude session for "${ws.name}"?\n\nThe next launch will start a fresh conversation. The current jsonl on disk is left alone.`,
+                    {
+                      title: "Reset Claude session",
+                      kind: "warning",
+                      okLabel: "Reset",
+                      cancelLabel: "Cancel",
+                    },
+                  );
+                  if (ok) props.onResetSession(ws.id);
+                }}
+              >
+                <span class="workspace-menu-item-label">Reset session</span>
+              </button>
+              <button
+                type="button"
+                class="workspace-menu-item"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpenMenuId(null);
+                  props.onArchive(ws.id);
+                }}
+              >
+                <span class="workspace-menu-item-label">Archive</span>
+              </button>
               <div class="workspace-menu-label">Project</div>
               <button
                 type="button"
@@ -384,6 +448,73 @@ const Sidebar: Component<SidebarProps> = (props) => {
             <div class="workspace-section-header">Passive</div>
             <ul class="workspace-list">
               <For each={sections().passive}>{renderRow}</For>
+            </ul>
+          </Show>
+        </Show>
+        <Show when={props.archived.length > 0}>
+          <button
+            type="button"
+            class="workspace-section-header workspace-section-header--toggle"
+            aria-expanded={archiveOpen() ? "true" : "false"}
+            onClick={toggleArchive}
+            title={archiveOpen() ? "Collapse archive" : "Expand archive"}
+          >
+            <span>Archive ({props.archived.length})</span>
+            <span class="workspace-section-caret" aria-hidden="true">
+              {archiveOpen() ? "▾" : "▸"}
+            </span>
+          </button>
+          <Show when={archiveOpen()}>
+            <ul class="workspace-list workspace-list--archive">
+              <For each={props.archived}>
+                {(ws) => (
+                  <li class="workspace-item workspace-item--archived" title={ws.name}>
+                    <span class="status-dot status-none" aria-hidden="true" />
+                    <div class="workspace-meta">
+                      <div class="workspace-name">
+                        <ClaudeMark />
+                        <span class="workspace-name-text" title={ws.name}>
+                          {ws.name}
+                        </span>
+                      </div>
+                      <div class="workspace-substack">
+                        <span class="status-label status-label-none">Archived</span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      class="workspace-archive-restore"
+                      title="Restore workspace"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        props.onUnarchive(ws.id);
+                      }}
+                    >
+                      ↺
+                    </button>
+                    <button
+                      type="button"
+                      class="workspace-delete"
+                      title="Delete forever"
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        const ok = await ask(
+                          `Delete archived workspace "${ws.name}" forever?\n\nThe DB row is removed; on-disk files (including the Claude jsonl) are left alone.`,
+                          {
+                            title: "Delete forever",
+                            kind: "warning",
+                            okLabel: "Delete forever",
+                            cancelLabel: "Cancel",
+                          },
+                        );
+                        if (ok) props.onDelete(ws.id);
+                      }}
+                    >
+                      ×
+                    </button>
+                  </li>
+                )}
+              </For>
             </ul>
           </Show>
         </Show>

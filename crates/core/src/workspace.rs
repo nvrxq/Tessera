@@ -36,6 +36,17 @@ pub struct Workspace {
     /// field, falling back to `created_at` for ties so newly inserted rows
     /// are deterministic.
     pub sort_order: i64,
+    /// Claude Code session uuid (the `.jsonl` stem under
+    /// `~/.claude/projects/<encoded-cwd>/`). NULL until the first spawn
+    /// finishes and we detect the freshest jsonl for the cwd. When set, we
+    /// spawn claude with `--resume <id>` instead of `--continue`, which
+    /// keeps two workspaces sharing a folder pinned to their own
+    /// conversations.
+    pub claude_session_id: Option<String>,
+    /// Soft-archive timestamp. `None` means active; `Some` means the row
+    /// is hidden from the main list but everything (including the pinned
+    /// Claude session) stays intact so the user can restore it.
+    pub archived_at: Option<DateTime<Utc>>,
 }
 
 /// A user-defined grouping for workspaces. Workspaces hold a nullable

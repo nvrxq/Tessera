@@ -2,6 +2,7 @@
 
 pub mod activity;
 pub mod claude;
+pub mod claude_session;
 pub mod config;
 pub mod error;
 pub mod extras;
@@ -42,6 +43,8 @@ mod tests {
             has_prior_session: false,
             project_id: None,
             sort_order: 0,
+            claude_session_id: None,
+            archived_at: None,
         };
         let j = serde_json::to_string(&ws).unwrap();
         let back: Workspace = serde_json::from_str(&j).unwrap();

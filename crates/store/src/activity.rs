@@ -115,6 +115,8 @@ mod tests {
             has_prior_session: false,
             project_id: None,
             sort_order: 0,
+            claude_session_id: None,
+            archived_at: None,
         };
         crate::workspaces::insert(conn, &ws).unwrap();
         ws.id

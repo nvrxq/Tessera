@@ -159,6 +159,14 @@ pub struct WorkspaceDto {
     pub agent_status: Option<tessera_core::AgentStatus>,
     pub project_id: Option<Uuid>,
     pub sort_order: i64,
+    /// Pinned Claude Code session uuid (stem of the jsonl under
+    /// `~/.claude/projects/<encoded-cwd>/`). Surfaced so the UI can show
+    /// a "Reset session" affordance and an indicator that the workspace
+    /// is bound to a specific conversation.
+    pub claude_session_id: Option<String>,
+    /// Soft-archive timestamp. The active sidebar query filters these
+    /// out; the archive section shows them.
+    pub archived_at: Option<DateTime<Utc>>,
 }
 
 impl WorkspaceDto {
@@ -181,6 +189,8 @@ impl WorkspaceDto {
             agent_status,
             project_id: ws.project_id,
             sort_order: ws.sort_order,
+            claude_session_id: ws.claude_session_id,
+            archived_at: ws.archived_at,
         }
     }
 }
@@ -293,6 +303,53 @@ pub fn workspace_rename(
 ) -> Result<(), String> {
     state
         .rename(workspace_id, &new_name)
+        .map_err(|e| e.to_string())
+}
+
+/// Soft-archive: hide from the main list but keep the row + pinned
+/// Claude session intact. Used by the "Archive" entry in the workspace
+/// menu.
+#[tauri::command]
+pub fn workspace_archive(
+    state: State<'_, WorkspaceServiceState>,
+    workspace_id: Uuid,
+) -> Result<(), String> {
+    state.archive(workspace_id).map_err(|e| e.to_string())
+}
+
+/// Move a workspace back from the archive section into the active list.
+#[tauri::command]
+pub fn workspace_unarchive(
+    state: State<'_, WorkspaceServiceState>,
+    workspace_id: Uuid,
+) -> Result<(), String> {
+    state.unarchive(workspace_id).map_err(|e| e.to_string())
+}
+
+/// Archived rows only. Frontend pages these into a collapsed section in
+/// the sidebar; we keep them separate from `workspace_list` so the hot
+/// path stays branch-free.
+#[tauri::command]
+pub fn workspace_list_archived(
+    state: State<'_, WorkspaceServiceState>,
+) -> Result<Vec<WorkspaceDto>, String> {
+    let items = state.list_archived().map_err(|e| e.to_string())?;
+    Ok(items
+        .into_iter()
+        .map(|w| WorkspaceDto::from_workspace(w, None, None))
+        .collect())
+}
+
+/// Drop the pinned Claude session uuid so the next spawn starts a fresh
+/// conversation (and re-pins to whatever Claude writes next). User-facing
+/// "Reset session" menu entry.
+#[tauri::command]
+pub fn workspace_reset_session(
+    state: State<'_, WorkspaceServiceState>,
+    workspace_id: Uuid,
+) -> Result<(), String> {
+    state
+        .reset_claude_session(workspace_id)
         .map_err(|e| e.to_string())
 }
 

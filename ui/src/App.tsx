@@ -34,15 +34,19 @@ import {
   settings,
 } from "./lib/settings";
 import {
+  archiveWorkspace,
   createProject,
   deleteProject,
   deleteWorkspace,
+  listArchivedWorkspaces,
   listProjects,
   listWorkspaces,
   onWorkspaceStatus,
   onWorkspaceWorktree,
   renameWorkspace,
+  resetWorkspaceSession,
   spawnAgent,
+  unarchiveWorkspace,
   workspaceAssignProject,
   workspaceReorder,
   type Project,
@@ -68,6 +72,8 @@ function useClock() {
 
 const App: Component = () => {
   const [workspaces, { mutate, refetch }] = createResource<WorkspaceDto[]>(listWorkspaces);
+  const [archivedWorkspaces, { mutate: mutateArchived, refetch: refetchArchived }] =
+    createResource<WorkspaceDto[]>(listArchivedWorkspaces);
   const [projects, { refetch: refetchProjects }] =
     createResource<Project[]>(listProjects);
   const [selectedId, setSelectedId] = createSignal<string | null>(null);
@@ -445,9 +451,55 @@ const App: Component = () => {
     try {
       await deleteWorkspace(id);
       mutate((list) => list?.filter((w) => w.id !== id) ?? list);
+      mutateArchived((list) => list?.filter((w) => w.id !== id) ?? list);
       if (selectedId() === id) setSelectedId(null);
     } catch (e) {
       void message(`Delete failed: ${String(e)}`, { kind: "error", title: "Tessera" });
+      refetch();
+      refetchArchived();
+    }
+  };
+
+  /** Soft-archive: row stays in the DB (with its pinned Claude session)
+   *  but disappears from the main sidebar. Selection clears so the user
+   *  doesn't end up staring at a terminal for a row that's now hidden. */
+  const onArchive = async (id: string) => {
+    try {
+      await archiveWorkspace(id);
+      if (selectedId() === id) setSelectedId(null);
+      refetch();
+      refetchArchived();
+    } catch (e) {
+      void message(`Archive failed: ${String(e)}`, { kind: "error", title: "Tessera" });
+      refetch();
+      refetchArchived();
+    }
+  };
+
+  const onUnarchive = async (id: string) => {
+    try {
+      await unarchiveWorkspace(id);
+      refetch();
+      refetchArchived();
+    } catch (e) {
+      void message(`Restore failed: ${String(e)}`, { kind: "error", title: "Tessera" });
+      refetch();
+      refetchArchived();
+    }
+  };
+
+  /** Drop the pinned Claude session uuid. Mutate locally so the menu's
+   *  "Pinned to …" hint updates immediately; the next spawn re-runs
+   *  detection and re-pins. */
+  const onResetSession = async (id: string) => {
+    mutate(
+      (list) =>
+        list?.map((w) => (w.id === id ? { ...w, claude_session_id: null } : w)) ?? list,
+    );
+    try {
+      await resetWorkspaceSession(id);
+    } catch (e) {
+      console.error("reset session failed", e);
       refetch();
     }
   };
@@ -594,6 +646,7 @@ const App: Component = () => {
         <div class="layout">
           <Sidebar
             workspaces={workspaces() ?? []}
+            archived={archivedWorkspaces() ?? []}
             projects={projects() ?? []}
             selectedId={selectedId()}
             onSelect={onSelect}
@@ -602,6 +655,9 @@ const App: Component = () => {
             onReorder={onReorder}
             onAssignProject={onAssignProject}
             onRename={onRename}
+            onArchive={onArchive}
+            onUnarchive={onUnarchive}
+            onResetSession={onResetSession}
           />
           <main class="main-pane">
             <Show when={showNew()}>

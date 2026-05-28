@@ -115,8 +115,9 @@ pub fn run() {
             // Per-byte latency budget on the backend side: ≤2 ms wait for
             // the next tick + ~50 µs snapshot + ~100 µs JSON emit = ~2.2 ms.
             // Frontend then has ~16 ms display-refresh floor.
-            let pty_seen_at: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<uuid::Uuid, std::time::Instant>>> =
-                std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+            let pty_seen_at: std::sync::Arc<
+                std::sync::Mutex<std::collections::HashMap<uuid::Uuid, std::time::Instant>>,
+            > = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
             let bench_enabled = std::env::var("TESSERA_BENCH").is_ok();
             {
                 let reg = registry.clone();
@@ -288,6 +289,10 @@ pub fn run() {
             commands::workspace_spawn_agent,
             commands::workspace_delete,
             commands::workspace_rename,
+            commands::workspace_archive,
+            commands::workspace_unarchive,
+            commands::workspace_list_archived,
+            commands::workspace_reset_session,
             commands::project_create,
             commands::project_list,
             commands::project_delete,

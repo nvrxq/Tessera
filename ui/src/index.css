@@ -434,6 +434,50 @@ body {
 .workspace-sections > .workspace-section-header:first-child {
   padding-top: 8px;
 }
+/* Archive section header doubles as a collapse/expand toggle. Strip the
+ * native <button> chrome so it reads as the same quiet label as the
+ * non-interactive headers, but stays focusable + keyboard-actionable. */
+.workspace-section-header--toggle {
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  width: calc(100% - 38px);
+  text-align: left;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  cursor: pointer;
+  color: var(--text-muted);
+  margin-top: 8px;
+}
+.workspace-section-header--toggle:hover {
+  color: var(--text-primary);
+}
+.workspace-section-caret {
+  font-size: 10px;
+  opacity: 0.7;
+}
+/* Archived rows feel quieter than active ones — dimmer text and no
+ * status accent. The Restore (↺) button mirrors the Delete (×) slot
+ * pattern. */
+.workspace-list--archive .workspace-item--archived {
+  opacity: 0.7;
+}
+.workspace-archive-restore {
+  background: none;
+  border: 0;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 4px;
+  transition: color var(--t-short) var(--ease-out), background var(--t-short) var(--ease-out);
+}
+.workspace-archive-restore:hover {
+  color: var(--accent);
+  background: var(--surface-hover);
+}
 .workspace-item {
   display: flex;
   align-items: flex-start;

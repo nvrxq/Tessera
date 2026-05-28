@@ -7,6 +7,7 @@ describe("Sidebar", () => {
     render(() => (
       <Sidebar
         workspaces={[]}
+        archived={[]}
         projects={[]}
         selectedId={null}
         onSelect={() => {}}
@@ -15,6 +16,9 @@ describe("Sidebar", () => {
         onReorder={() => {}}
         onAssignProject={() => {}}
         onRename={() => {}}
+        onArchive={() => {}}
+        onUnarchive={() => {}}
+        onResetSession={() => {}}
       />
     ));
     expect(screen.getByText("No workspaces yet")).toBeInTheDocument();

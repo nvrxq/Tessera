@@ -17,6 +17,12 @@ export interface WorkspaceDto {
   agent_status: AgentStatus | null;
   project_id: string | null;
   sort_order: number;
+  /** Pinned Claude session uuid (jsonl stem under
+   *  `~/.claude/projects/<encoded-cwd>/`). Null until the first spawn
+   *  finishes detection. */
+  claude_session_id: string | null;
+  /** ISO-8601 timestamp when the workspace was soft-archived, or null. */
+  archived_at: string | null;
 }
 
 export interface Project {
@@ -128,6 +134,24 @@ export function deleteWorkspace(workspaceId: string): Promise<void> {
 
 export function renameWorkspace(workspaceId: string, newName: string): Promise<void> {
   return invoke<void>("workspace_rename", { workspaceId, newName });
+}
+
+export function archiveWorkspace(workspaceId: string): Promise<void> {
+  return invoke<void>("workspace_archive", { workspaceId });
+}
+
+export function unarchiveWorkspace(workspaceId: string): Promise<void> {
+  return invoke<void>("workspace_unarchive", { workspaceId });
+}
+
+export function listArchivedWorkspaces(): Promise<WorkspaceDto[]> {
+  return invoke<WorkspaceDto[]>("workspace_list_archived");
+}
+
+/** Drop the pinned Claude session uuid so the next spawn starts a fresh
+ *  conversation (and re-pins to whatever Claude writes next). */
+export function resetWorkspaceSession(workspaceId: string): Promise<void> {
+  return invoke<void>("workspace_reset_session", { workspaceId });
 }
 
 export function listDirectories(input: string): Promise<string[]> {

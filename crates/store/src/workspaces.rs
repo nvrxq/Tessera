@@ -11,8 +11,8 @@ pub fn insert(conn: &Connection, ws: &Workspace) -> Result<()> {
         "INSERT INTO workspaces \
             (id, name, repo_path, worktree_path, branch, created_at, setup_status, \
              detected_worktree, detected_branch, dangerous_skip_permissions, has_prior_session, \
-             project_id, sort_order) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+             project_id, sort_order, claude_session_id, archived_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         params![
             ws.id.to_string(),
             ws.name,
@@ -29,6 +29,8 @@ pub fn insert(conn: &Connection, ws: &Workspace) -> Result<()> {
             ws.has_prior_session as i64,
             ws.project_id.map(|p| p.to_string()),
             ws.sort_order,
+            ws.claude_session_id,
+            ws.archived_at.map(|t| t.to_rfc3339()),
         ],
     )?;
     Ok(())
@@ -38,7 +40,7 @@ pub fn get(conn: &Connection, id: Uuid) -> Result<Option<Workspace>> {
     let mut stmt = conn.prepare_cached(
         "SELECT id, name, repo_path, worktree_path, branch, created_at, setup_status, \
                 detected_worktree, detected_branch, dangerous_skip_permissions, has_prior_session, \
-                project_id, sort_order \
+                project_id, sort_order, claude_session_id, archived_at \
          FROM workspaces WHERE id = ?1",
     )?;
     stmt.query_row(params![id.to_string()], row_to_workspace)
@@ -46,14 +48,31 @@ pub fn get(conn: &Connection, id: Uuid) -> Result<Option<Workspace>> {
         .map_err(Into::into)
 }
 
+/// Active (non-archived) workspaces. Hot path — workspace_list runs on
+/// every sidebar paint. Cache the statement so we skip re-parsing the
+/// SQL each call.
 pub fn list(conn: &Connection) -> Result<Vec<Workspace>> {
-    // Hot path — workspace_list runs on every sidebar paint. Cache the
-    // statement so we skip re-parsing the SQL each call.
     let mut stmt = conn.prepare_cached(
         "SELECT id, name, repo_path, worktree_path, branch, created_at, setup_status, \
                 detected_worktree, detected_branch, dangerous_skip_permissions, has_prior_session, \
-                project_id, sort_order \
-         FROM workspaces ORDER BY sort_order ASC, created_at ASC",
+                project_id, sort_order, claude_session_id, archived_at \
+         FROM workspaces WHERE archived_at IS NULL \
+         ORDER BY sort_order ASC, created_at ASC",
+    )?;
+    let rows = stmt.query_map([], row_to_workspace)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+/// Archived workspaces, newest archive first. Backs the Archive section
+/// in the sidebar — keep separate from `list` so the active query stays
+/// branch-free.
+pub fn list_archived(conn: &Connection) -> Result<Vec<Workspace>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT id, name, repo_path, worktree_path, branch, created_at, setup_status, \
+                detected_worktree, detected_branch, dangerous_skip_permissions, has_prior_session, \
+                project_id, sort_order, claude_session_id, archived_at \
+         FROM workspaces WHERE archived_at IS NOT NULL \
+         ORDER BY archived_at DESC",
     )?;
     let rows = stmt.query_map([], row_to_workspace)?;
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -130,6 +149,38 @@ pub fn update_detected_worktree(
     Ok(())
 }
 
+/// Pin the workspace to a specific Claude session uuid (the `.jsonl`
+/// stem under `~/.claude/projects/<encoded-cwd>/`). Pass `None` to clear
+/// the pin and let the next spawn fall back to `--continue`.
+pub fn update_claude_session_id(
+    conn: &Connection,
+    id: Uuid,
+    session_id: Option<&str>,
+) -> Result<()> {
+    let n = conn.execute(
+        "UPDATE workspaces SET claude_session_id = ?1 WHERE id = ?2",
+        params![session_id, id.to_string()],
+    )?;
+    anyhow::ensure!(n == 1, "workspace {id} not found");
+    Ok(())
+}
+
+/// Move the row into the archive (or back out). `Some(ts)` archives at
+/// the given moment; `None` restores. Activity, projects, and the pinned
+/// Claude session stay untouched.
+pub fn update_archived_at(
+    conn: &Connection,
+    id: Uuid,
+    archived_at: Option<DateTime<Utc>>,
+) -> Result<()> {
+    let n = conn.execute(
+        "UPDATE workspaces SET archived_at = ?1 WHERE id = ?2",
+        params![archived_at.map(|t| t.to_rfc3339()), id.to_string()],
+    )?;
+    anyhow::ensure!(n == 1, "workspace {id} not found");
+    Ok(())
+}
+
 pub fn delete(conn: &Connection, id: Uuid) -> Result<()> {
     let n = conn.execute(
         "DELETE FROM workspaces WHERE id = ?1",
@@ -149,10 +200,26 @@ fn row_to_workspace(row: &rusqlite::Row<'_>) -> rusqlite::Result<Workspace> {
     let has_prior: i64 = row.get(10)?;
     let project_id_s: Option<String> = row.get(11)?;
     let sort_order: i64 = row.get(12)?;
+    let claude_session_id: Option<String> = row.get(13)?;
+    let archived_s: Option<String> = row.get(14)?;
     let project_id = match project_id_s {
         Some(s) => Some(Uuid::parse_str(&s).map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(11, rusqlite::types::Type::Text, Box::new(e))
         })?),
+        None => None,
+    };
+    let archived_at = match archived_s {
+        Some(s) => Some(
+            DateTime::parse_from_rfc3339(&s)
+                .map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        14,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?
+                .with_timezone(&Utc),
+        ),
         None => None,
     };
     Ok(Workspace {
@@ -181,6 +248,8 @@ fn row_to_workspace(row: &rusqlite::Row<'_>) -> rusqlite::Result<Workspace> {
         has_prior_session: has_prior != 0,
         project_id,
         sort_order,
+        claude_session_id,
+        archived_at,
     })
 }
 
@@ -204,6 +273,8 @@ mod tests {
             has_prior_session: false,
             project_id: None,
             sort_order: 0,
+            claude_session_id: None,
+            archived_at: None,
         }
     }
 
@@ -327,6 +398,48 @@ mod tests {
         update_project(&conn, ws.id, None).unwrap();
         let got = get(&conn, ws.id).unwrap().unwrap();
         assert_eq!(got.project_id, None);
+    }
+
+    #[test]
+    fn archive_hides_from_list_but_keeps_row() {
+        let conn = open_in_memory().unwrap();
+        let active = sample("active");
+        let archived = sample("archived");
+        insert(&conn, &active).unwrap();
+        insert(&conn, &archived).unwrap();
+        let ts = Utc::now();
+        update_archived_at(&conn, archived.id, Some(ts)).unwrap();
+
+        let listed = list(&conn).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, active.id);
+
+        let archived_list = list_archived(&conn).unwrap();
+        assert_eq!(archived_list.len(), 1);
+        assert_eq!(archived_list[0].id, archived.id);
+        assert!(archived_list[0].archived_at.is_some());
+
+        // Row is still readable directly.
+        assert!(get(&conn, archived.id).unwrap().is_some());
+
+        // Restore brings it back into the active list.
+        update_archived_at(&conn, archived.id, None).unwrap();
+        assert_eq!(list(&conn).unwrap().len(), 2);
+        assert!(list_archived(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn claude_session_id_round_trips() {
+        let conn = open_in_memory().unwrap();
+        let ws = sample("s");
+        insert(&conn, &ws).unwrap();
+        update_claude_session_id(&conn, ws.id, Some("01234567-aaaa")).unwrap();
+        let got = get(&conn, ws.id).unwrap().unwrap();
+        assert_eq!(got.claude_session_id.as_deref(), Some("01234567-aaaa"));
+
+        update_claude_session_id(&conn, ws.id, None).unwrap();
+        let got = get(&conn, ws.id).unwrap().unwrap();
+        assert_eq!(got.claude_session_id, None);
     }
 
     #[test]

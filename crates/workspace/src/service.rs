@@ -110,6 +110,8 @@ impl WorkspaceService {
             has_prior_session: false,
             project_id,
             sort_order: next_order,
+            claude_session_id: None,
+            archived_at: None,
         };
 
         tessera_store::workspaces::insert(&conn, &ws)?;
@@ -135,6 +137,42 @@ impl WorkspaceService {
         tessera_store::workspaces::update_name(&conn, id, trimmed)
     }
 
+    /// Archived workspaces (newest archive first). The active sidebar
+    /// query uses `list()`, which excludes these; the archive section in
+    /// the UI queries this directly.
+    pub fn list_archived(&self) -> Result<Vec<Workspace>> {
+        let conn = self.db.lock().unwrap();
+        tessera_store::workspaces::list_archived(&conn)
+    }
+
+    /// Move a workspace into the archive. Kills the live PTY (same as
+    /// delete) so claude isn't left running attached to a hidden row,
+    /// but everything else — DB row, projects, activity, the pinned
+    /// `claude_session_id` — stays intact so `unarchive` restores the
+    /// conversation cleanly.
+    pub fn archive(&self, workspace_id: Uuid) -> Result<()> {
+        // Existence check up front, same shape as `delete`.
+        let _ = {
+            let conn = self.db.lock().unwrap();
+            tessera_store::workspaces::get(&conn, workspace_id)?
+                .ok_or_else(|| anyhow::anyhow!("workspace {workspace_id} not found"))?
+        };
+        if let Some(session_id) = self.sessions.lock().unwrap().remove(&workspace_id) {
+            let _ = self.supervisor.kill(session_id);
+        }
+        self.statuses.lock().unwrap().remove(&workspace_id);
+        let conn = self.db.lock().unwrap();
+        tessera_store::workspaces::update_archived_at(&conn, workspace_id, Some(chrono::Utc::now()))
+    }
+
+    /// Restore an archived workspace. The pinned `claude_session_id`
+    /// (if any) is preserved so the next spawn picks the conversation
+    /// back up via `--resume`.
+    pub fn unarchive(&self, workspace_id: Uuid) -> Result<()> {
+        let conn = self.db.lock().unwrap();
+        tessera_store::workspaces::update_archived_at(&conn, workspace_id, None)
+    }
+
     pub fn delete(&self, workspace_id: Uuid) -> Result<()> {
         let _ = {
             let conn = self.db.lock().unwrap();
@@ -158,8 +196,19 @@ impl WorkspaceService {
 
     /// Spawn `claude` directly in the workspace folder. No shell wrapper,
     /// no integration scripts — Tessera is a Claude Code TUI viewer, not a
-    /// general terminal. Pass `--continue` if the workspace has a prior
-    /// session so claude resumes its previous conversation.
+    /// general terminal.
+    ///
+    /// Conversation continuity rules (resolves the cross-workspace session
+    /// mixing bug — two workspaces sharing a folder used to both `--continue`
+    /// the same jsonl):
+    /// * **pinned + jsonl exists** → `claude --resume <id>` (sticky per
+    ///   workspace).
+    /// * **pinned but jsonl vanished** → drop the pin and fall back to
+    ///   `--continue`; log to tracing so we notice if Claude rotates files.
+    /// * **not pinned, never launched** → plain `claude`; after the spawn
+    ///   we detect the freshest jsonl for the cwd and pin it.
+    /// * **not pinned, prior session ran** → `--continue` (legacy path
+    ///   used by rows created before migration 0009).
     pub fn spawn_agent(&self, workspace_id: Uuid, cols: u16, rows: u16) -> Result<Uuid> {
         let workspace = {
             let conn = self.db.lock().unwrap();
@@ -171,8 +220,37 @@ impl WorkspaceService {
         if workspace.dangerous_skip_permissions {
             args.push("--dangerously-skip-permissions".to_string());
         }
-        if workspace.has_prior_session {
-            args.push("--continue".to_string());
+        let mut clear_pin_after_spawn = false;
+        match workspace.claude_session_id.as_deref() {
+            Some(sid)
+                if tessera_core::claude_session::session_file_exists(
+                    &workspace.worktree_path,
+                    sid,
+                ) =>
+            {
+                args.push("--resume".to_string());
+                args.push(sid.to_string());
+            }
+            Some(sid) => {
+                // The pinned jsonl is gone — Claude probably rotated or
+                // deleted it. Drop the pin so the freshly-detected one
+                // takes over after spawn, and fall back to `--continue`
+                // so we still surface whatever recent conversation Claude
+                // is willing to resume.
+                tracing::warn!(
+                    workspace_id = %workspace_id,
+                    pinned = sid,
+                    "pinned claude session jsonl missing — falling back to --continue",
+                );
+                clear_pin_after_spawn = true;
+                if workspace.has_prior_session {
+                    args.push("--continue".to_string());
+                }
+            }
+            None if workspace.has_prior_session => {
+                args.push("--continue".to_string());
+            }
+            None => {}
         }
         let env: Vec<(String, String)> = Vec::new();
         let session_id = self.spawn_session_inner(
@@ -192,7 +270,75 @@ impl WorkspaceService {
                 tracing::warn!(error = %e, "mark_session_started failed");
             }
         }
+        if clear_pin_after_spawn {
+            let conn = self.db.lock().unwrap();
+            if let Err(e) =
+                tessera_store::workspaces::update_claude_session_id(&conn, workspace_id, None)
+            {
+                tracing::warn!(error = %e, "clearing stale claude_session_id failed");
+            }
+        }
+        // Async pin: give Claude a moment to materialise its jsonl, then
+        // detect the freshest one for this cwd and persist it. This is
+        // best-effort — if it races (claude takes > the delay) the next
+        // spawn will still benefit, because every spawn re-runs detection
+        // when nothing is pinned.
+        if workspace.claude_session_id.is_none() || clear_pin_after_spawn {
+            self.schedule_session_id_detection(workspace_id, workspace.worktree_path.clone());
+        }
         Ok(session_id)
+    }
+
+    /// Spawn-then-detect. Spawned on a stdlib thread (not Tokio) so this
+    /// crate stays runtime-agnostic. 1.5 s is enough on a warm machine for
+    /// Claude to write the first chunk of its jsonl; we also re-scan up
+    /// to two more times in case the spawn was cold.
+    fn schedule_session_id_detection(&self, workspace_id: Uuid, cwd: std::path::PathBuf) {
+        let db = self.db.clone();
+        std::thread::spawn(move || {
+            for _ in 0..3 {
+                std::thread::sleep(std::time::Duration::from_millis(1500));
+                let Some(sid) = tessera_core::claude_session::newest_session_id(&cwd) else {
+                    continue;
+                };
+                let conn = match db.lock() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "db lock poisoned during session detect");
+                        return;
+                    }
+                };
+                // Don't overwrite a pin the user (or a prior detection)
+                // already set — only fill the empty slot.
+                match tessera_store::workspaces::get(&conn, workspace_id) {
+                    Ok(Some(w)) if w.claude_session_id.is_none() => {
+                        if let Err(e) = tessera_store::workspaces::update_claude_session_id(
+                            &conn,
+                            workspace_id,
+                            Some(&sid),
+                        ) {
+                            tracing::warn!(error = %e, "pinning claude session failed");
+                        } else {
+                            tracing::info!(
+                                workspace_id = %workspace_id,
+                                claude_session_id = %sid,
+                                "pinned claude session for workspace",
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+                return;
+            }
+        });
+    }
+
+    /// Drop the pinned Claude session uuid. Next spawn will either use
+    /// `--continue` (legacy) or start fresh, then re-detect and re-pin.
+    /// User-facing "Reset session" menu entry.
+    pub fn reset_claude_session(&self, workspace_id: Uuid) -> Result<()> {
+        let conn = self.db.lock().unwrap();
+        tessera_store::workspaces::update_claude_session_id(&conn, workspace_id, None)
     }
 
     /// Like `spawn_agent` but lets callers pick the program — used by tests to
@@ -461,6 +607,58 @@ mod tests {
         assert!(folder.exists(), "user folder must not be removed");
         assert!(svc.list().unwrap().is_empty());
         assert_eq!(svc.current_session(ws.id), None);
+    }
+
+    #[test]
+    fn archive_hides_from_list_and_unarchive_restores() {
+        let (svc, dir) = make_service();
+        let folder = dir.path().join("any-folder");
+        std::fs::create_dir_all(&folder).unwrap();
+        let active = svc.create(&folder, "active", false, None).unwrap();
+        let archive_me = svc.create(&folder, "later", false, None).unwrap();
+        assert_eq!(svc.list().unwrap().len(), 2);
+
+        svc.archive(archive_me.id).unwrap();
+        let active_list = svc.list().unwrap();
+        assert_eq!(active_list.len(), 1);
+        assert_eq!(active_list[0].id, active.id);
+        let archived_list = svc.list_archived().unwrap();
+        assert_eq!(archived_list.len(), 1);
+        assert_eq!(archived_list[0].id, archive_me.id);
+        assert!(archived_list[0].archived_at.is_some());
+
+        svc.unarchive(archive_me.id).unwrap();
+        assert_eq!(svc.list().unwrap().len(), 2);
+        assert!(svc.list_archived().unwrap().is_empty());
+    }
+
+    #[test]
+    fn reset_claude_session_clears_pin() {
+        let (svc, dir) = make_service();
+        let folder = dir.path().join("any-folder");
+        std::fs::create_dir_all(&folder).unwrap();
+        let ws = svc.create(&folder, "w", false, None).unwrap();
+        {
+            let conn = svc.db.lock().unwrap();
+            tessera_store::workspaces::update_claude_session_id(&conn, ws.id, Some("abc-123"))
+                .unwrap();
+        }
+        let row = svc
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|w| w.id == ws.id)
+            .unwrap();
+        assert_eq!(row.claude_session_id.as_deref(), Some("abc-123"));
+
+        svc.reset_claude_session(ws.id).unwrap();
+        let row = svc
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|w| w.id == ws.id)
+            .unwrap();
+        assert_eq!(row.claude_session_id, None);
     }
 
     #[test]
