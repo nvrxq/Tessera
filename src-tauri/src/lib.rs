@@ -553,9 +553,7 @@ fn dispatch_hook(app: &AppHandle, svc: &Arc<WorkspaceService>, evt: HookEvent) {
     };
     let summary = summarise_hook(&evt);
     let mut payload_str = serde_json::to_string(&evt.payload).unwrap_or_default();
-    if payload_str.len() > 4096 {
-        payload_str.truncate(4096);
-    }
+    truncate_on_char_boundary(&mut payload_str, 4096);
     let entry = ActivityEntry {
         id: uuid::Uuid::new_v4(),
         workspace_id: evt.workspace_id,
@@ -676,6 +674,67 @@ fn truncate_120(s: &str) -> String {
     let mut out: String = s.chars().take(117).collect();
     out.push_str("...");
     out
+}
+
+/// Truncate `s` in-place to at most `max_bytes`, snapping back to the nearest
+/// UTF-8 char boundary. `String::truncate` panics if the cut lands inside a
+/// multi-byte codepoint; this never does.
+fn truncate_on_char_boundary(s: &mut String, max_bytes: usize) {
+    if s.len() <= max_bytes {
+        return;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s.truncate(end);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate_on_char_boundary;
+
+    #[test]
+    fn snaps_back_inside_two_byte_char() {
+        // "abcё" = 3 + 2 = 5 bytes. Cut at 4 lands inside ё; snap to 3.
+        let mut s = String::from("abcё");
+        truncate_on_char_boundary(&mut s, 4);
+        assert_eq!(s, "abc");
+    }
+
+    #[test]
+    fn snaps_back_inside_four_byte_char() {
+        // "ab🦀" = 2 + 4 = 6 bytes. Cut at 5 lands inside 🦀; snap to 2.
+        let mut s = String::from("ab🦀");
+        truncate_on_char_boundary(&mut s, 5);
+        assert_eq!(s, "ab");
+    }
+
+    #[test]
+    fn ascii_cuts_exactly() {
+        let mut s: String = "a".repeat(5000);
+        truncate_on_char_boundary(&mut s, 4096);
+        assert_eq!(s.len(), 4096);
+    }
+
+    #[test]
+    fn shorter_than_limit_is_noop() {
+        let mut s = String::from("hello");
+        truncate_on_char_boundary(&mut s, 4096);
+        assert_eq!(s, "hello");
+    }
+
+    #[test]
+    fn regression_v0_1_8_cyrillic_payload_does_not_panic() {
+        // The actual v0.1.8 crash: dispatch_hook serializes evt.payload to
+        // JSON, then truncates to 4096 bytes. Cyrillic in tool_input made
+        // the unchecked String::truncate hit a non-char-boundary and panic.
+        let mut s: String = "ё".repeat(3000);
+        truncate_on_char_boundary(&mut s, 4095);
+        assert!(s.len() <= 4095);
+        assert!(s.is_char_boundary(s.len()));
+        std::str::from_utf8(s.as_bytes()).expect("still valid UTF-8");
+    }
 }
 
 /// CLI-side handler for `tessera hook <workspace_id> <kind>`. Reads stdin
