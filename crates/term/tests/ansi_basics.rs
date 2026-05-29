@@ -10,7 +10,7 @@ fn writer() -> Box<dyn std::io::Write + Send> {
 fn row_string(t: &Term, pal: &ColorPalette, row: usize) -> String {
     let grid = t.grid(pal);
     let rows = grid.to_vec();
-    rows[row].iter().map(|c| c.ch).collect()
+    rows[row].iter().map(|c| c.ch.as_str()).collect()
 }
 
 #[test]

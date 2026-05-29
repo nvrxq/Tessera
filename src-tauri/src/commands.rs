@@ -488,6 +488,13 @@ pub fn settings_save(
     registry: tauri::State<'_, TerminalRegistryState>,
     config: UserConfig,
 ) -> Result<(), String> {
+    // Normalize the in-memory copy too (not just the on-disk clamp inside
+    // `save`), so the live `settings_changed` event and the hot-swapped
+    // palette carry the same clamped values the disk does — otherwise a
+    // programmatic/hand-edited out-of-range font size would render live until
+    // the next reload re-read the (clamped) file.
+    let mut config = config;
+    config.normalize();
     let path = config_path();
     config.save(&path).map_err(|e| e.to_string())?;
 
@@ -936,10 +943,11 @@ pub fn workspace_tasks_reorder(db: State<'_, DbState>, ids: Vec<Uuid>) -> Result
 /// Returns `1` when a reset should credit a completed work cycle, `0`
 /// otherwise. Pure so it can be unit-tested without a DB.
 ///
-/// Rules — credit when the prior mode is `Work` or `Paused` and the elapsed
-/// work time is at least half the target. The half-target threshold keeps
-/// "accidental start → reset" from inflating the counter while still
-/// rewarding a paused 23-of-25-min session.
+/// Rules — credit when the prior mode is `Work`, or `Paused` *from* `Work`,
+/// and the elapsed work time is at least half the target. The half-target
+/// threshold keeps "accidental start → reset" from inflating the counter
+/// while still rewarding a paused 23-of-25-min work session. A paused
+/// `Break` never credits a cycle, no matter how long it ran.
 ///
 /// Elapsed depends on mode:
 /// - `Work`:   `elapsed_seconds_before_pause + (now - started_at)`
@@ -955,7 +963,11 @@ fn pomodoro_reset_cycle_credit(prior: &PomodoroState, now: DateTime<Utc>) -> i64
                 .unwrap_or(0);
             prior.elapsed_seconds_before_pause + live
         }
-        PomodoroMode::Paused => prior.elapsed_seconds_before_pause,
+        // Only a paused *work* run counts. A paused Break (target 300s,
+        // threshold 150s) must never be mistaken for a completed work cycle.
+        PomodoroMode::Paused if prior.paused_from == Some(PomodoroMode::Work) => {
+            prior.elapsed_seconds_before_pause
+        }
         _ => return 0,
     };
     if total >= prior.target_seconds / 2 {
@@ -1041,6 +1053,7 @@ pub fn app_pomodoro_start(
         elapsed_seconds_before_pause: 0,
         cycles_completed,
         updated_at: now,
+        paused_from: None,
     };
     tessera_store::extras::upsert_app_pomodoro(&conn, &state).map_err(|e| e.to_string())?;
     Ok(AppPomodoroStateDto::from(state))
@@ -1066,6 +1079,9 @@ pub fn app_pomodoro_pause(db: State<'_, DbState>) -> Result<AppPomodoroStateDto,
         elapsed_seconds_before_pause: prior.elapsed_seconds_before_pause + elapsed_now,
         cycles_completed: prior.cycles_completed,
         updated_at: Utc::now(),
+        // Remember which mode we paused so resume restores it and cycle
+        // crediting can distinguish a paused Break from a paused Work.
+        paused_from: Some(prior.mode),
     };
     tessera_store::extras::upsert_app_pomodoro(&conn, &state).map_err(|e| e.to_string())?;
     Ok(AppPomodoroStateDto::from(state))
@@ -1078,16 +1094,21 @@ pub fn app_pomodoro_resume(db: State<'_, DbState>) -> Result<AppPomodoroStateDto
     if !matches!(prior.mode, PomodoroMode::Paused) {
         return Ok(AppPomodoroStateDto::from(prior));
     }
+    // Restore the mode that was active before the pause. `target_seconds`
+    // was preserved through the pause, so a paused Break resumes as a Break
+    // with its 300s target rather than being relabelled as Work.
+    let resume_mode = prior.paused_from.unwrap_or(PomodoroMode::Work);
     let new_started = Utc::now() - chrono::Duration::seconds(prior.elapsed_seconds_before_pause);
     let state = PomodoroState {
         workspace_id: Uuid::nil(),
-        mode: PomodoroMode::Work,
+        mode: resume_mode,
         started_at: Some(new_started),
         paused_at: None,
         target_seconds: prior.target_seconds,
         elapsed_seconds_before_pause: 0,
         cycles_completed: prior.cycles_completed,
         updated_at: Utc::now(),
+        paused_from: None,
     };
     tessera_store::extras::upsert_app_pomodoro(&conn, &state).map_err(|e| e.to_string())?;
     Ok(AppPomodoroStateDto::from(state))
@@ -1107,6 +1128,7 @@ pub fn app_pomodoro_reset(db: State<'_, DbState>) -> Result<AppPomodoroStateDto,
         elapsed_seconds_before_pause: 0,
         cycles_completed: cycles,
         updated_at: Utc::now(),
+        paused_from: None,
     };
     tessera_store::extras::upsert_app_pomodoro(&conn, &state).map_err(|e| e.to_string())?;
     Ok(AppPomodoroStateDto::from(state))
@@ -1153,6 +1175,28 @@ mod extras_tests {
             elapsed_seconds_before_pause: before,
             cycles_completed: 0,
             updated_at: Utc::now(),
+            paused_from: None,
+        }
+    }
+
+    /// A `Paused` state that remembers the mode it was paused from, plus an
+    /// explicit `target_seconds` so break runs (300s) can be modelled.
+    fn paused_from(
+        prior_mode: PomodoroMode,
+        started_at: Option<DateTime<Utc>>,
+        before: i64,
+        target_seconds: i64,
+    ) -> PomodoroState {
+        PomodoroState {
+            workspace_id: Uuid::nil(),
+            mode: PomodoroMode::Paused,
+            started_at,
+            paused_at: started_at,
+            target_seconds,
+            elapsed_seconds_before_pause: before,
+            cycles_completed: 0,
+            updated_at: Utc::now(),
+            paused_from: Some(prior_mode),
         }
     }
 
@@ -1187,17 +1231,41 @@ mod extras_tests {
         assert_eq!(pomodoro_reset_cycle_credit(&p, now), 1);
     }
 
-    /// Regression: a 23-of-25-min session that the user paused and *then*
-    /// reset should still credit one cycle. Earlier code only matched
+    /// Regression: a 23-of-25-min work session that the user paused and
+    /// *then* reset should still credit one cycle. Earlier code only matched
     /// `PomodoroMode::Work` and dropped the credit because pause flips the
     /// mode to `Paused`.
     #[test]
-    fn cycle_credit_one_when_paused_past_half_target() {
+    fn cycle_credit_one_when_paused_work_past_half_target() {
         let now = Utc::now();
         // started 30 min ago, paused 7 min later → 23 min credit, started_at frozen.
         let started = now - chrono::Duration::seconds(30 * 60);
-        let p = pomodoro(PomodoroMode::Paused, Some(started), 23 * 60);
+        let p = paused_from(PomodoroMode::Work, Some(started), 23 * 60, 1500);
         assert_eq!(pomodoro_reset_cycle_credit(&p, now), 1);
+    }
+
+    /// Regression (this bug): a paused *Break* must NEVER credit a work
+    /// cycle, even past its half-target threshold. A 5-min break (300s
+    /// target, 150s threshold) paused at 4 min would have been mis-counted
+    /// as a completed work cycle before `paused_from` was recorded.
+    #[test]
+    fn cycle_credit_zero_when_paused_break_past_half_target() {
+        let now = Utc::now();
+        let started = now - chrono::Duration::seconds(4 * 60);
+        // 4 min elapsed of a 5-min break — well past the 150s threshold.
+        let p = paused_from(PomodoroMode::Break, Some(started), 4 * 60, 300);
+        assert_eq!(pomodoro_reset_cycle_credit(&p, now), 0);
+    }
+
+    /// A paused work run under half target still gets no credit — parity
+    /// with the running-work early-bail case.
+    #[test]
+    fn cycle_credit_zero_when_paused_work_under_half_target() {
+        let now = Utc::now();
+        let started = now - chrono::Duration::seconds(20 * 60);
+        // Only 5 min of work credit (target 1500, threshold 750s).
+        let p = paused_from(PomodoroMode::Work, Some(started), 5 * 60, 1500);
+        assert_eq!(pomodoro_reset_cycle_credit(&p, now), 0);
     }
 
     /// Regression: when paused, we must NOT add `(now - started_at)` to
@@ -1209,7 +1277,7 @@ mod extras_tests {
         let now = Utc::now();
         // started 2h ago, paused after 60 s → only 60 s of credit.
         let started = now - chrono::Duration::hours(2);
-        let p = pomodoro(PomodoroMode::Paused, Some(started), 60);
+        let p = paused_from(PomodoroMode::Work, Some(started), 60, 1500);
         assert_eq!(pomodoro_reset_cycle_credit(&p, now), 0);
     }
 
@@ -1232,6 +1300,7 @@ mod extras_tests {
             elapsed_seconds_before_pause: 23 * 60,
             cycles_completed: 4,
             updated_at: now,
+            paused_from: Some(PomodoroMode::Work),
         };
         tessera_store::extras::upsert_app_pomodoro(&conn, &paused_state).unwrap();
 
@@ -1251,12 +1320,84 @@ mod extras_tests {
             elapsed_seconds_before_pause: 0,
             cycles_completed: cycles,
             updated_at: Utc::now(),
+            paused_from: None,
         };
         tessera_store::extras::upsert_app_pomodoro(&conn, &reset_state).unwrap();
         let after = tessera_store::extras::get_app_pomodoro(&conn).unwrap();
         assert!(matches!(after.mode, PomodoroMode::Idle));
         assert_eq!(after.cycles_completed, 5);
         assert_eq!(after.elapsed_seconds_before_pause, 0);
+    }
+
+    /// End-to-end: a paused Break that the user resets must NOT credit a
+    /// cycle, regardless of how long the break ran. This is the core defect
+    /// — before `paused_from`, the half-target threshold (150s of a 300s
+    /// break) inflated `cycles_completed`.
+    #[test]
+    fn app_pomodoro_reset_from_paused_break_credits_nothing() {
+        let conn = tessera_store::open_in_memory().unwrap();
+        let now = Utc::now();
+        let started = now - chrono::Duration::seconds(4 * 60);
+        let paused_break = PomodoroState {
+            workspace_id: Uuid::nil(),
+            mode: PomodoroMode::Paused,
+            started_at: Some(started),
+            paused_at: Some(now),
+            target_seconds: 300, // 5-min break
+            elapsed_seconds_before_pause: 4 * 60, // past the 150s half-target
+            cycles_completed: 7,
+            updated_at: now,
+            paused_from: Some(PomodoroMode::Break),
+        };
+        tessera_store::extras::upsert_app_pomodoro(&conn, &paused_break).unwrap();
+
+        let prior = tessera_store::extras::get_app_pomodoro(&conn).unwrap();
+        // `paused_from` must survive the round-trip through SQLite.
+        assert_eq!(prior.paused_from, Some(PomodoroMode::Break));
+        let cycles = prior.cycles_completed + pomodoro_reset_cycle_credit(&prior, Utc::now());
+        assert_eq!(cycles, 7, "a paused Break must never credit a work cycle");
+    }
+
+    /// `app_pomodoro_resume` semantics: a paused Break resumes as a Break
+    /// (keeping its 300s target), not as Work. Re-derives the resume state
+    /// the same way the command does, exercising the `paused_from` restore
+    /// through the real store round-trip.
+    #[test]
+    fn app_pomodoro_resume_restores_break_mode() {
+        let conn = tessera_store::open_in_memory().unwrap();
+        let now = Utc::now();
+        let paused_break = PomodoroState {
+            workspace_id: Uuid::nil(),
+            mode: PomodoroMode::Paused,
+            started_at: Some(now - chrono::Duration::seconds(60)),
+            paused_at: Some(now),
+            target_seconds: 300,
+            elapsed_seconds_before_pause: 60,
+            cycles_completed: 0,
+            updated_at: now,
+            paused_from: Some(PomodoroMode::Break),
+        };
+        tessera_store::extras::upsert_app_pomodoro(&conn, &paused_break).unwrap();
+
+        let prior = tessera_store::extras::get_app_pomodoro(&conn).unwrap();
+        let resume_mode = prior.paused_from.unwrap_or(PomodoroMode::Work);
+        let resumed = PomodoroState {
+            workspace_id: Uuid::nil(),
+            mode: resume_mode,
+            started_at: Some(Utc::now() - chrono::Duration::seconds(prior.elapsed_seconds_before_pause)),
+            paused_at: None,
+            target_seconds: prior.target_seconds,
+            elapsed_seconds_before_pause: 0,
+            cycles_completed: prior.cycles_completed,
+            updated_at: Utc::now(),
+            paused_from: None,
+        };
+        tessera_store::extras::upsert_app_pomodoro(&conn, &resumed).unwrap();
+
+        let after = tessera_store::extras::get_app_pomodoro(&conn).unwrap();
+        assert!(matches!(after.mode, PomodoroMode::Break), "break resumes as break, not work");
+        assert_eq!(after.target_seconds, 300, "break keeps its 300s target");
+        assert_eq!(after.paused_from, None, "paused_from cleared on resume");
     }
 
     /// Regression: starting a new mode while a Work session is past half

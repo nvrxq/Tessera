@@ -295,9 +295,15 @@ body {
   border-radius: 4px;
   transition: color var(--t-short), background var(--t-short);
 }
-.topmeta-version:hover {
+.topmeta-version:hover:not(:disabled) {
   color: var(--text-primary);
   background: var(--surface-hover);
+}
+/* Disabled while a check/download is in flight — quiet it down and drop the
+ * pointer affordance so it reads as inert, not clickable. */
+.topmeta-version:disabled {
+  opacity: 0.5;
+  cursor: progress;
 }
 
 /* —— update pill ——
@@ -2862,4 +2868,32 @@ button[type="submit"]:hover:not(:disabled) {
 .inventory-error-retry:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* —— density: comfortable ——
+ * "compact" is the default look (Linear-style, 4px base) and lives in the
+ * rules above untouched. When the user picks "comfortable" in Settings,
+ * App.tsx sets [data-density="comfortable"] on <html>; these rules relax
+ * the densest list surfaces — looser paddings and line-heights off the
+ * same 4px grid — without rewriting the whole system. Sidebar list rows
+ * are where density is felt most, so that's where the air goes. */
+[data-density="comfortable"] .workspace-item {
+  padding: 16px 22px;
+  gap: 14px;
+}
+[data-density="comfortable"] .workspace-meta {
+  gap: 7px;
+}
+[data-density="comfortable"] .workspace-section-header {
+  padding: 18px 22px 8px;
+}
+[data-density="comfortable"] .workspace-sections
+  > .workspace-section-header:first-child {
+  padding-top: 12px;
+}
+[data-density="comfortable"] .sidebar-head {
+  padding: 12px 22px 8px;
+}
+[data-density="comfortable"] .workspace-menu-item {
+  padding: 8px 10px;
 }

@@ -124,6 +124,11 @@ pub struct PomodoroState {
     pub elapsed_seconds_before_pause: i64,
     pub cycles_completed: i64,
     pub updated_at: DateTime<Utc>,
+    /// The `Work`/`Break` mode that was active before a pause, recorded so
+    /// resume can restore the right mode and cycle-crediting can tell a
+    /// paused work session from a paused break. `None` whenever `mode` is
+    /// not `Paused`.
+    pub paused_from: Option<PomodoroMode>,
 }
 
 impl PomodoroState {
@@ -139,6 +144,7 @@ impl PomodoroState {
             elapsed_seconds_before_pause: 0,
             cycles_completed: 0,
             updated_at: Utc::now(),
+            paused_from: None,
         }
     }
 }

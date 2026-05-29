@@ -1,7 +1,9 @@
 import {
+  createEffect,
   createResource,
   createSignal,
   For,
+  on,
   Show,
   type Component,
 } from "solid-js";
@@ -46,6 +48,10 @@ function readStoredTab(id: string): Tab {
 
 const WorkspaceExtrasPanel: Component<WorkspaceExtrasPanelProps> = (props) => {
   const [tab, setTab] = createSignal<Tab>(readStoredTab(props.workspaceId));
+  // The panel is not re-keyed on workspace switch, so the initializer above
+  // only runs once. Re-sync the active tab whenever the workspace prop
+  // changes so the tab header doesn't show the previous workspace's state.
+  createEffect(on(() => props.workspaceId, (id) => setTab(readStoredTab(id))));
   const selectTab = (next: Tab) => {
     setTab(next);
     localStorage.setItem(tabKey(props.workspaceId), next);

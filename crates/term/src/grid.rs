@@ -58,21 +58,25 @@ impl<'a> Grid<'a> {
             .lines_in_phys_range(start..start + rows)
             .into_iter()
             .map(move |line| {
-                let mut row: Vec<GridCell> = line
-                    .visible_cells()
-                    .map(|c| GridCell::from_wez(&c.as_cell(), palette))
-                    .collect();
+                let mut row: Vec<GridCell> = Vec::with_capacity(cols);
+                for c in line.visible_cells() {
+                    // Place each cell at its TRUE physical column. wezterm's
+                    // `visible_cells()` omits the blank spacer that trails a
+                    // wide glyph, so `cell_index()` can skip a column — gap-pad
+                    // up to it so positional indexing stays aligned with the
+                    // terminal's real columns (otherwise everything after a
+                    // CJK/emoji glyph shifts left by one).
+                    let idx = c.cell_index();
+                    while row.len() < idx && row.len() < cols {
+                        row.push(GridCell::blank(palette));
+                    }
+                    if row.len() >= cols {
+                        break;
+                    }
+                    row.push(GridCell::from_wez(&c.as_cell(), palette));
+                }
                 while row.len() < cols {
-                    row.push(GridCell {
-                        ch: ' ',
-                        fg: palette.default_fg,
-                        bg: palette.default_bg,
-                        bold: false,
-                        italic: false,
-                        underline: false,
-                        double_underline: false,
-                        strikethrough: false,
-                    });
+                    row.push(GridCell::blank(palette));
                 }
                 row.truncate(cols);
                 row
@@ -98,20 +102,20 @@ impl<'a> Grid<'a> {
         let palette = self.palette;
         let top = screen.phys_row(0);
         let start = top.saturating_sub(offset_back);
-        let blank = GridCell {
-            ch: ' ',
-            fg: palette.default_fg,
-            bg: palette.default_bg,
-            bold: false,
-            italic: false,
-            underline: false,
-            double_underline: false,
-            strikethrough: false,
-        };
+        let blank = GridCell::blank(palette);
         for line in screen.lines_in_phys_range(start..start + rows) {
             scratch.clear();
             scratch.reserve(cols);
             for c in line.visible_cells() {
+                // Gap-pad to the cell's true physical column so wide-glyph
+                // spacer columns stay aligned — see `rows_iter_with_offset`.
+                let idx = c.cell_index();
+                while scratch.len() < idx && scratch.len() < cols {
+                    scratch.push(blank);
+                }
+                if scratch.len() >= cols {
+                    break;
+                }
                 scratch.push(GridCell::from_wez(&c.as_cell(), palette));
             }
             while scratch.len() < cols {
@@ -146,7 +150,7 @@ mod tests {
     }
 
     fn row_text(row: &[GridCell]) -> String {
-        row.iter().map(|c| c.ch).collect()
+        row.iter().map(|c| c.ch.as_str()).collect()
     }
 
     #[test]
@@ -168,5 +172,23 @@ mod tests {
         let rows = t.grid(&pal).to_vec();
         assert!(row_text(&rows[0]).starts_with("line1"));
         assert!(row_text(&rows[1]).starts_with("line2"));
+    }
+
+    #[test]
+    fn wide_char_keeps_following_cells_aligned() {
+        // Regression: a width-2 glyph must occupy its true two physical
+        // columns so the next cell lands at its real column, not one to the
+        // left. wezterm omits the trailing spacer of a wide cell, so without
+        // gap-padding by cell_index the row collapses left.
+        let mut t = Term::new(20, 3, writer());
+        t.feed("世X".as_bytes());
+        let pal = ColorPalette::tessera_dark();
+        let rows = t.grid(&pal).to_vec();
+        let row = &rows[0];
+        assert_eq!(row.len(), 20, "row padded to cols");
+        assert_eq!(row[0].ch.as_str(), "世");
+        assert_eq!(row[0].width, 2, "wide glyph reports width 2");
+        assert_eq!(row[1].ch.as_str(), " ", "wide glyph spacer column is blank");
+        assert_eq!(row[2].ch.as_str(), "X", "X sits at its true physical col 2");
     }
 }

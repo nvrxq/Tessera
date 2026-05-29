@@ -29,6 +29,11 @@ interface WireCell {
   f: number;
   b: number;
   a: number;
+  /** On-screen column span: 1 normal, 2 for a wide CJK / wide emoji glyph.
+   *  The backend emits a blank spacer cell for the column a wide glyph's
+   *  right half occupies, so linear indexing stays aligned; this only tells
+   *  the delta painter how wide to clip the glyph. */
+  w: number;
 }
 
 interface Snapshot {
@@ -43,6 +48,10 @@ interface Snapshot {
   cursor_col: number;
   cursor_row: number;
   cursor_visible: boolean;
+  /** True when scrolled up into scrollback history. Suppresses the
+   *  alwaysShowCursor override so a live cursor isn't painted over old
+   *  scrollback content. */
+  scrolled: boolean;
   /** "hidden" is reserved for future PTY backends that distinguish a
    *  shape-level hide (e.g. nested fullscreen apps, password prompts)
    *  from DECTCEM visibility. wezterm-term currently never emits it,
@@ -129,6 +138,26 @@ export default function Terminal(props: TerminalProps) {
     if (sid === activeSessionId) return;
     activeSessionId = sid;
     pendingSnaps.length = 0;
+    // Force the next applied snapshot to re-baseline the grid: drop the
+    // mirror dims so `applySnapshot` always takes the full/sizeChanged
+    // branch even if the new session happens to share the previous one's
+    // dimensions. Without this, a delta for the new session (the 1ms tick
+    // emits them continuously for every live session) could be patched onto
+    // the PREVIOUS session's stale grid → stray/garbled cells for a frame.
+    grid = [];
+    gridCols = 0;
+    gridRows = 0;
+    lastCursorVisible = false;
+    lastCursorCol = -1;
+    lastCursorRow = -1;
+    // Blank the canvas now so the previous session's painted pixels don't
+    // linger (or flash through the re-arming loading overlay) until the new
+    // session's first full snapshot lands.
+    const ctx = ctx2dOf();
+    if (ctx && canvas.width > 0 && canvas.height > 0) {
+      ctx.fillStyle = bgHex;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
     // Selection is per-grid; the new session has its own dimensions and
     // content, so any leftover highlight from the previous session would
     // be visually nonsensical. Reset without repainting — the upcoming
@@ -170,7 +199,10 @@ export default function Terminal(props: TerminalProps) {
 
   // Snapshot values from the settings store. Live updates re-run the
   // createEffect below so changes apply without remounting the canvas.
-  let fontPx = settings().terminal.font_size_px;
+  let fontPx = Math.min(
+    MAX_FONT_PX,
+    Math.max(MIN_FONT_PX, settings().terminal.font_size_px),
+  );
   let fontFamily = settings().terminal.font_family;
   let bgInt = hexToInt(settings().terminal.background);
   let bgHex = settings().terminal.background;
@@ -348,9 +380,11 @@ export default function Terminal(props: TerminalProps) {
    *  - "ready":      first snapshot painted — overlay fades out (240ms)
    * Covers the canvas (z-index 2) so we don't briefly flash an empty grid
    * while claude is cold-starting. */
-  const [phase, setPhase] = createSignal<"spawning" | "connecting" | "ready">(
-    props.sessionId ? "connecting" : "spawning",
-  );
+  const [phase, setPhase] = createSignal<
+    "spawning" | "connecting" | "ready" | "error"
+  >(props.sessionId ? "connecting" : "spawning");
+  // Human-readable reason when phase === "error" (e.g. claude not on PATH).
+  const [spawnError, setSpawnError] = createSignal<string | null>(null);
 
   function measureCell(dpr: number) {
     const ctx = ctx2dOf();
@@ -450,11 +484,24 @@ export default function Terminal(props: TerminalProps) {
     if (!cell) return;
     const r = (idx / gridCols) | 0;
     const c = idx - r * gridCols;
+    // If the left neighbour is a wide glyph, this cell is its right-half
+    // spacer. The wide cell already filled BOTH columns' background and drew
+    // the 2-column glyph; painting here would re-fill this column's bg over
+    // the glyph's right half and erase it (the delta path applies cells in
+    // ascending index order, so the spacer lands after the wide cell). No-op.
+    if (c > 0) {
+      const left = grid[idx - 1];
+      if (left && left.w > 1) return;
+    }
     const x = (c * cellW) | 0;
     const y = (r * cellH) | 0;
+    // Wide cells own `w` columns of background so the glyph (drawn across the
+    // same span below) sits on a consistent backdrop and its right half isn't
+    // left over default-bg.
+    const span = cell.w > 1 ? cell.w * cellW : cellW;
 
     ctx.fillStyle = hexColor(cell.b);
-    ctx.fillRect(x, y, cellW, cellH);
+    ctx.fillRect(x, y, span, cellH);
 
     if (cell.c !== " " || (cell.a & 28) !== 0) {
       const bold = (cell.a & 1) !== 0;
@@ -467,10 +514,11 @@ export default function Terminal(props: TerminalProps) {
       ctx.textBaseline = "alphabetic";
       // Clip the glyph to its cell so antialiased halos from italics /
       // descenders can't bleed into neighbouring cells and survive a
-      // future delta repaint as a stray pixel.
+      // future delta repaint as a stray pixel. Wide (CJK/emoji) glyphs are
+      // clipped to their full `span` so the right half isn't cut off.
       ctx.save();
       ctx.beginPath();
-      ctx.rect(x, y, cellW, cellH);
+      ctx.rect(x, y, span, cellH);
       ctx.clip();
       ctx.fillText(cell.c, x, (y + baseline) | 0);
       ctx.restore();
@@ -702,7 +750,7 @@ export default function Terminal(props: TerminalProps) {
       if (grid.length < gridCols * gridRows) {
         const fgInt = untrack(() => hexToInt(settings().terminal.foreground));
         while (grid.length < gridCols * gridRows) {
-          grid.push({ c: " ", f: fgInt, b: bgInt, a: 0 });
+          grid.push({ c: " ", f: fgInt, b: bgInt, a: 0, w: 1 });
         }
       }
       paintFull(px);
@@ -737,9 +785,13 @@ export default function Terminal(props: TerminalProps) {
     // into `alwaysShowCursor`: TUIs intentionally swap to Hidden for
     // nested fullscreen apps and password prompts where leaking a cursor
     // would be wrong (or, worse, security-sensitive).
+    // Suppress the alwaysShowCursor override while scrolled into history —
+    // otherwise the live cursor is painted over old scrollback content. The
+    // backend reports `scrolled` (scroll_offset != 0); when scrolled it also
+    // sets cursor_visible=false, so the live tail still shows the cursor.
     const shouldShowCursor =
       snap.cursor_visible ||
-      (alwaysShowCursor && snap.cursor_shape !== "hidden");
+      (alwaysShowCursor && snap.cursor_shape !== "hidden" && !snap.scrolled);
     // Erase the previous cursor cell if we painted one AND either the
     // position changed or we're about to stop painting a cursor. (If
     // we're about to repaint at the SAME position, the unconditional
@@ -901,6 +953,22 @@ export default function Terminal(props: TerminalProps) {
     resizeCanvasBacking();
     measureCell(window.devicePixelRatio || 1);
 
+    // 'Geist Mono' is a self-hosted webfont with font-display:swap, so at
+    // first paint (cold WebView font cache) measureText returns fallback-font
+    // metrics, which then get cached for the whole session — the grid is
+    // sized/aligned to the wrong font. Re-measure once the real font is
+    // ready, invalidating the stale cache entry, and re-sync the grid.
+    if (typeof document !== "undefined" && document.fonts?.ready) {
+      void document.fonts.ready
+        .then(() => {
+          const dpr = window.devicePixelRatio || 1;
+          fontMetricsCache.delete(`${fontPx * dpr}px ${fontFamily}`);
+          measureCell(dpr);
+          void syncGrid();
+        })
+        .catch(() => {});
+    }
+
     void (async () => {
       await listenerReady;
 
@@ -966,6 +1034,21 @@ export default function Terminal(props: TerminalProps) {
       function onKey(ev: KeyboardEvent) {
         const sid = activeSessionId;
         if (!sid) return;
+        // This listener lives on `document`, so keystrokes typed into any
+        // overlaying text field (extras panel inputs, settings hex/colour
+        // fields, rename box) would otherwise be encoded and injected into
+        // the PTY — eating the character and corrupting both the form and
+        // the agent's input. Bail when the event originates in an editable
+        // element. Mirrors the guard in App.onGlobalKey.
+        const t = ev.target as HTMLElement | null;
+        if (
+          t &&
+          (t.tagName === "INPUT" ||
+            t.tagName === "TEXTAREA" ||
+            t.isContentEditable)
+        ) {
+          return;
+        }
         lastKeydownAt = performance.now();
         // Cursor should always be visible while the user is actively
         // typing; reset the blink phase so the cursor doesn't disappear
@@ -1091,6 +1174,7 @@ export default function Terminal(props: TerminalProps) {
   let prevFont = fontFamily;
   let prevFontPx = fontPx;
   let prevBg = bgHex;
+  let prevBgInt = bgInt;
   let prevFg = settings().terminal.foreground;
   let prevCursorColor = cursorColorHex;
   let prevPalette = settings().terminal.palette.join("|");
@@ -1098,7 +1182,13 @@ export default function Terminal(props: TerminalProps) {
   createEffect(() => {
     const cfg = settings();
     fontFamily = cfg.terminal.font_family;
-    fontPx = cfg.terminal.font_size_px;
+    // Clamp defensively: an out-of-range font size persisted by an older
+    // binary (or a hand-edited settings.json) must never reach measureCell /
+    // gridFromCanvas and blow up the grid.
+    fontPx = Math.min(
+      MAX_FONT_PX,
+      Math.max(MIN_FONT_PX, cfg.terminal.font_size_px),
+    );
     bgHex = cfg.terminal.background;
     bgInt = hexToInt(bgHex);
     cursorColorHex = cfg.terminal.cursor_color;
@@ -1114,9 +1204,11 @@ export default function Terminal(props: TerminalProps) {
     const cursorColorChanged = prevCursorColor !== cursorColorHex;
     const paletteChanged = prevPalette !== paletteKey;
     const blinkChanged = prevBlink !== cursorBlinkEnabled;
+    const oldBgInt = prevBgInt;
     prevFont = fontFamily;
     prevFontPx = fontPx;
     prevBg = bgHex;
+    prevBgInt = bgInt;
     prevFg = fgHex;
     prevCursorColor = cursorColorHex;
     prevPalette = paletteKey;
@@ -1130,6 +1222,21 @@ export default function Terminal(props: TerminalProps) {
       // off the live `bgHex` / `cursorColorHex` / `settings()` reads
       // inside the painters, so picking new colours takes effect on
       // the next frame.
+      //
+      // The mirror stores per-cell bg as already-resolved RGB (resolved by
+      // the backend through the OLD palette). On a background change, cells
+      // that WERE the default background (b === oldBgInt) must be rewritten
+      // to the new default, otherwise paintFull's "skip default bg" check
+      // (cell.b !== bgInt) treats them as non-default and overpaints them
+      // with the stale colour — a flash of the old background on every
+      // default cell. The authoritative re-resolve still arrives via the
+      // backend's next full snapshot, but this keeps the live-preview path
+      // (which never round-trips set_palette) correct in the meantime.
+      if (bgChanged && oldBgInt !== bgInt) {
+        for (let i = 0; i < grid.length; i++) {
+          if (grid[i].b === oldBgInt) grid[i].b = bgInt;
+        }
+      }
       const dpr = window.devicePixelRatio || 1;
       paintFull(fontPx * dpr);
     }
@@ -1138,6 +1245,55 @@ export default function Terminal(props: TerminalProps) {
       else stopCursorBlink();
     }
   });
+
+  /** Spawn claude for `ws` and adopt its session. Reused by the workspace
+   *  createEffect and by the error-overlay retry button. Surfaces a backend
+   *  spawn failure (e.g. `claude` not on PATH) as the "error" phase instead
+   *  of leaving the overlay stuck on "starting claude" forever. */
+  function attemptSpawn(ws: string) {
+    if (spawning.has(ws)) return;
+    spawning.add(ws);
+    setSpawnError(null);
+    void (async () => {
+      try {
+        // Wait for the snapshot listener to be live BEFORE asking the
+        // backend to spawn claude — otherwise the very first emit can
+        // arrive in the dead window between createEffect firing and
+        // listen() resolving, and we'd lose the initial `full` payload.
+        await listenerReady;
+        const { cols, rows } = gridFromCanvas();
+        const newSid = await spawnAgent(ws, cols, rows);
+        // Guard against a stale spawn finishing AFTER the user already
+        // switched workspaces — bind the session and notify the parent only
+        // while this is still the active workspace.
+        if (props.workspaceId === ws) {
+          setActiveSession(newSid);
+          setPhase("connecting");
+          await invoke("terminal_resize", { sessionId: newSid, cols, rows });
+          // Re-check AFTER the await: the user may have switched workspaces
+          // during the IPC round-trip. Without this, onSpawned would stamp
+          // this session id onto whatever workspace is now selected.
+          if (props.workspaceId === ws) props.onSpawned(newSid);
+        }
+      } catch (e) {
+        // Only surface the error if we're still on this workspace; a stale
+        // failure for a workspace the user already left shouldn't hijack the
+        // current view.
+        if (props.workspaceId === ws) {
+          setSpawnError(String(e));
+          setPhase("error");
+        }
+      } finally {
+        spawning.delete(ws);
+      }
+    })();
+  }
+
+  const retrySpawn = () => {
+    const ws = props.workspaceId;
+    setPhase("spawning");
+    attemptSpawn(ws);
+  };
 
   createEffect(() => {
     const ws = props.workspaceId;
@@ -1153,36 +1309,7 @@ export default function Terminal(props: TerminalProps) {
       void syncGrid();
       return;
     }
-    if (spawning.has(ws)) return;
-    spawning.add(ws);
-    void (async () => {
-      try {
-        // Wait for the snapshot listener to be live BEFORE asking the
-        // backend to spawn claude — otherwise the very first emit can
-        // arrive in the dead window between createEffect firing and
-        // listen() resolving, and we'd lose the initial `full` payload.
-        await listenerReady;
-        const { cols, rows } = gridFromCanvas();
-        const newSid = await spawnAgent(ws, cols, rows);
-        // Guard against a stale spawn finishing AFTER the user already
-        // switched workspaces. Without this check we would:
-        //   1. Bind `newSid` to the now-current workspace's terminal,
-        //      breaking the previous workspace's session mapping.
-        //   2. Fire `onSpawned(newSid)` which tells App to set the
-        //      session_id on the CURRENT workspace, not the one we
-        //      actually spawned for — silently corrupting state.
-        // Both `activeSessionId` adoption AND the parent callback must
-        // be gated by the workspace-still-matches invariant.
-        if (props.workspaceId === ws) {
-          setActiveSession(newSid);
-          setPhase("connecting");
-          await invoke("terminal_resize", { sessionId: newSid, cols, rows });
-          props.onSpawned(newSid);
-        }
-      } finally {
-        spawning.delete(ws);
-      }
-    })();
+    attemptSpawn(ws);
   });
 
   onCleanup(() => {
@@ -1406,15 +1533,55 @@ export default function Terminal(props: TerminalProps) {
       >
         <div class="terminal-loading-stack">
           <span class="terminal-loading-brand">tessera</span>
-          <div class="terminal-loading-dots" aria-label="loading">
-            <span />
-            <span />
-            <span />
-          </div>
-          <Show when={phase() !== "ready"}>
+          <Show when={phase() !== "error"}>
+            <div class="terminal-loading-dots" aria-label="loading">
+              <span />
+              <span />
+              <span />
+            </div>
+          </Show>
+          <Show when={phase() === "spawning" || phase() === "connecting"}>
             <span class="terminal-loading-caption">
               {phase() === "spawning" ? "starting claude" : "connecting"}
             </span>
+          </Show>
+          <Show when={phase() === "error"}>
+            <span
+              class="terminal-loading-caption"
+              style={{ color: "var(--accent, #C8825B)" }}
+            >
+              couldn’t start claude
+            </span>
+            <Show when={spawnError()}>
+              <span
+                class="terminal-loading-caption"
+                style={{
+                  "max-width": "34ch",
+                  "font-size": "11px",
+                  opacity: "0.7",
+                  "text-align": "center",
+                  "word-break": "break-word",
+                }}
+              >
+                {spawnError()}
+              </span>
+            </Show>
+            <button
+              type="button"
+              onClick={retrySpawn}
+              style={{
+                "margin-top": "8px",
+                padding: "4px 14px",
+                "font-size": "12px",
+                color: "var(--accent, #C8825B)",
+                background: "transparent",
+                border: "1px solid var(--accent, #C8825B)",
+                "border-radius": "4px",
+                cursor: "pointer",
+              }}
+            >
+              Retry
+            </button>
           </Show>
         </div>
       </div>
@@ -1434,7 +1601,9 @@ function encodeKey(ev: KeyboardEvent): number[] {
   }
   switch (ev.key) {
     case "Enter":      return [0x0d];
-    case "Tab":        return [0x09];
+    // Shift+Tab is back-tab (CSI Z) — Claude Code uses it to cycle
+    // permission/plan modes. Plain Tab stays 0x09.
+    case "Tab":        return ev.shiftKey ? [0x1b, 0x5b, 0x5a] : [0x09];
     case "Backspace":  return [0x7f];
     case "Escape":     return [0x1b];
     case "ArrowUp":    return [0x1b, 0x5b, 0x41];
@@ -1446,6 +1615,31 @@ function encodeKey(ev: KeyboardEvent): number[] {
     case "PageUp":     return [0x1b, 0x5b, 0x35, 0x7e];
     case "PageDown":   return [0x1b, 0x5b, 0x36, 0x7e];
     case "Delete":     return [0x1b, 0x5b, 0x33, 0x7e];
+    // Function keys (xterm sequences). Without these, F1–F9 fell through the
+    // length<=2 printable fallback and typed literal "F1".."F9" into the PTY,
+    // and F10–F12 were dropped entirely.
+    case "F1":         return [0x1b, 0x4f, 0x50];
+    case "F2":         return [0x1b, 0x4f, 0x51];
+    case "F3":         return [0x1b, 0x4f, 0x52];
+    case "F4":         return [0x1b, 0x4f, 0x53];
+    case "F5":         return [0x1b, 0x5b, 0x31, 0x35, 0x7e];
+    case "F6":         return [0x1b, 0x5b, 0x31, 0x37, 0x7e];
+    case "F7":         return [0x1b, 0x5b, 0x31, 0x38, 0x7e];
+    case "F8":         return [0x1b, 0x5b, 0x31, 0x39, 0x7e];
+    case "F9":         return [0x1b, 0x5b, 0x32, 0x30, 0x7e];
+    case "F10":        return [0x1b, 0x5b, 0x32, 0x31, 0x7e];
+    case "F11":        return [0x1b, 0x5b, 0x32, 0x33, 0x7e];
+    case "F12":        return [0x1b, 0x5b, 0x32, 0x34, 0x7e];
+  }
+  // Alt/Option + key → Meta: ESC-prefix the byte (Alt+b back-word, Alt+f
+  // forward-word, etc.). Prefer the ASCII key; on macOS Option produces a
+  // composed glyph, so recover the letter/digit from the physical code.
+  if (ev.altKey && !ev.ctrlKey && !ev.metaKey) {
+    let ch = "";
+    if (ev.key.length === 1 && ev.key.charCodeAt(0) <= 0x7f) ch = ev.key;
+    else if (/^Key[A-Z]$/.test(ev.code)) ch = ev.code.slice(3).toLowerCase();
+    else if (/^Digit[0-9]$/.test(ev.code)) ch = ev.code.slice(5);
+    if (ch) return [0x1b, ch.charCodeAt(0)];
   }
   if (ev.key.length >= 1 && ev.key.length <= 2 && !ev.metaKey) {
     return Array.from(TEXT_ENCODER.encode(ev.key));

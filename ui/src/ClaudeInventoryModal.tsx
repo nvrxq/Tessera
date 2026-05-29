@@ -41,9 +41,13 @@ const ClaudeInventoryModal: Component<ClaudeInventoryModalProps> = (props) => {
   const [tab, setTab] = createSignal<Tab>("skills");
   // Re-run the query whenever the workspace context flips. createResource's
   // source signal handles the refetch automatically.
-  const [inv, { refetch }] = createResource<ClaudeInventory, string | null>(
-    () => props.workspaceId,
-    (id) => claudeInventory(id),
+  // Wrap in an object so the source is always truthy — a raw null source
+  // would cause SolidJS to skip the fetcher entirely, leaving globals-only
+  // view permanently empty. The fetcher unwraps back to the real id (null =
+  // "all workspaces / globals only"), which the backend handles correctly.
+  const [inv, { refetch }] = createResource(
+    () => ({ id: props.workspaceId }),
+    ({ id }) => claudeInventory(id),
   );
 
   const skills = createMemo<Skill[]>(() => inv()?.skills ?? []);

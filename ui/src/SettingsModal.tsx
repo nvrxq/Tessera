@@ -11,6 +11,7 @@ import {
 import {
   DEFAULT_ANSI_PALETTE,
   DEFAULT_CONFIG,
+  loadSettings,
   saveSettings,
   setSettings,
   settings,
@@ -117,10 +118,22 @@ const SettingsModal: Component<SettingsModalProps> = (props) => {
   };
   onCleanup(() => {
     flushPendingCommit();
-    // If the modal is torn down without Save being clicked, revert any
-    // debounced live-preview edits so the user's "cancel" intent is
-    // honoured and the persisted config remains the source of truth.
-    if (!committed) setSettings(initialSnapshot);
+    // If the modal is torn down without Save being clicked, drop the
+    // unsaved draft previews — but DON'T blindly restore the open-time
+    // snapshot. While the modal was open the user may have persisted an
+    // unrelated change through the same global signal (e.g. Ctrl +/-
+    // terminal-zoom, which both updates `settings` and writes to disk).
+    // Writing `initialSnapshot` back would silently revert that persisted
+    // zoom in memory and leave the signal diverged from disk until the
+    // next restart. So re-read the persisted config from disk and apply
+    // that: it discards the draft previews while preserving anything that
+    // was actually saved. onCleanup can't await, so fire-and-forget with
+    // a fallback to the snapshot if the read fails.
+    if (!committed) {
+      void loadSettings()
+        .then(setSettings)
+        .catch(() => setSettings(initialSnapshot));
+    }
   });
 
   function cloneConfig(c: UserConfig): UserConfig {

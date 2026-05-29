@@ -10,17 +10,22 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use tessera_core::{HexColor, UserConfig};
-use tessera_term::{palette::ColorPalette, Color, CursorShape, GridCell, Term};
+use tessera_term::{palette::ColorPalette, Color, CursorShape, Grapheme, GridCell, Term};
 use uuid::Uuid;
 
 /// Compact wire form for one cell — sent inside `cells` whether the
 /// snapshot is full or delta.
 #[derive(Serialize, Copy, Clone, PartialEq, Eq)]
 pub struct WireCell {
-    pub c: char,
+    /// Grapheme cluster (serialized as a JSON string).
+    pub c: Grapheme,
     pub f: u32,
     pub b: u32,
     pub a: u8,
+    /// On-screen column span (1 normal, 2 wide). The frontend draws the glyph
+    /// across `w` columns; the spacer column a wide glyph occupies is emitted
+    /// as a separate blank cell so positional indexing stays aligned.
+    pub w: u8,
 }
 
 #[derive(Serialize, Clone)]
@@ -38,6 +43,11 @@ pub struct Snapshot {
     pub cursor_row: usize,
     pub cursor_visible: bool,
     pub cursor_shape: &'static str,
+    /// True when the view is scrolled up into scrollback history
+    /// (`scroll_offset != 0`). The frontend uses this to suppress the
+    /// `alwaysShowCursor` override so a live cursor isn't painted over old
+    /// scrollback content.
+    pub scrolled: bool,
 }
 
 /// Per-session state held alongside the parser so we can diff successive
@@ -240,6 +250,7 @@ impl TerminalRegistry {
                 cursor_row: cur.row,
                 cursor_visible: cur.visible && scroll_offset == 0,
                 cursor_shape: cursor_shape(&cur.shape),
+                scrolled: scroll_offset != 0,
             }
         } else {
             // Diff: collect (index, cell) for cells that changed. These
@@ -276,6 +287,7 @@ impl TerminalRegistry {
                 cursor_row: cur.row,
                 cursor_visible: cur.visible && scroll_offset == 0,
                 cursor_shape: cursor_shape(&cur.shape),
+                scrolled: scroll_offset != 0,
             }
         };
 
@@ -310,7 +322,13 @@ fn wire_cell(c: &GridCell) -> WireCell {
     if c.strikethrough {
         a |= 16;
     }
-    WireCell { c: c.ch, f, b, a }
+    WireCell {
+        c: c.ch,
+        f,
+        b,
+        a,
+        w: c.width,
+    }
 }
 
 /// Translate the user-facing settings into a `ColorPalette`. Invalid hex

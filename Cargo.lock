@@ -5439,6 +5439,7 @@ dependencies = [
 name = "tessera-term"
 version = "0.1.10"
 dependencies = [
+ "serde",
  "serde_json",
  "unicode-normalization",
  "wezterm-escape-parser",

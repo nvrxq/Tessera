@@ -14,7 +14,7 @@ fn modifier_letters_fold_to_ascii_through_full_pipe() {
     t.feed(bytes);
     let pal = ColorPalette::tessera_dark();
     let rows = t.grid(&pal).to_vec();
-    let row0: String = rows[0].iter().map(|c| c.ch).collect();
+    let row0: String = rows[0].iter().map(|c| c.ch.as_str()).collect();
     let trimmed = row0.trim_end();
     eprintln!("ROW0: {trimmed:?}");
     for c in trimmed.chars() {

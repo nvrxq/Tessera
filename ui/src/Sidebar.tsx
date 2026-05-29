@@ -98,7 +98,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
   // whose `⋯` menu is showing, or null. Outside-click handler closes it.
   const [openMenuId, setOpenMenuId] = createSignal<string | null>(null);
   // Inline rename mode — id of the workspace whose name cell is currently
-  // an <input>. Only one at a time; Enter commits, Esc/blur cancels.
+  // an <input>. Only one at a time; Enter/blur commits, Esc cancels.
   const [renamingId, setRenamingId] = createSignal<string | null>(null);
   // Archive section is collapsed by default — keeps the active list as
   // the primary focus, but one click away when the user wants to
@@ -116,6 +116,32 @@ const Sidebar: Component<SidebarProps> = (props) => {
     } catch {
       /* localStorage can throw in privacy modes; ignore. */
     }
+  };
+  // Controlled draft for the rename input. Seeded once when rename opens so
+  // that even if a status/worktree event recreates the <For> row mid-edit,
+  // the freshly-mounted <input> re-reads the live draft rather than ws.name.
+  const [renameDraft, setRenameDraft] = createSignal("");
+  // Guards against the Enter→blur double-commit: Enter blurs the input,
+  // which fires onBlur; this flag tells onBlur the commit already happened.
+  let renameCommitted = false;
+  const startRename = (ws: WorkspaceDto) => {
+    renameCommitted = false;
+    setRenameDraft(ws.name);
+    setRenamingId(ws.id);
+  };
+  // Commit the current draft (trimmed) if it's non-empty and changed.
+  // Idempotent via renameCommitted so Enter and the ensuing blur don't
+  // both fire onRename. Always clears rename mode.
+  const commitRename = (ws: WorkspaceDto) => {
+    if (renameCommitted) return;
+    renameCommitted = true;
+    const next = renameDraft().trim();
+    if (next && next !== ws.name) props.onRename(ws.id, next);
+    setRenamingId(null);
+  };
+  const cancelRename = () => {
+    renameCommitted = true;
+    setRenamingId(null);
   };
   const onDocClick = (e: MouseEvent) => {
     // Any click outside `.workspace-menu-wrap` closes the popover.
@@ -242,7 +268,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
                 <span
                   class="workspace-project-dot"
                   title={`Project: ${p().name}`}
-                  style={p().accent ? { "background-color": p().accent } : undefined}
+                  style={p().accent ? { "background-color": p().accent! } : undefined}
                 />
               )}
             </Show>
@@ -253,7 +279,9 @@ const Sidebar: Component<SidebarProps> = (props) => {
               <input
                 type="text"
                 class="workspace-name-input"
-                value={ws.name}
+                // Controlled by the draft signal (not ws.name), so the live
+                // text survives a row recreate triggered by an agent event.
+                value={renameDraft()}
                 autofocus
                 draggable={false}
                 onMouseDown={(e) => e.stopPropagation()}
@@ -267,21 +295,24 @@ const Sidebar: Component<SidebarProps> = (props) => {
                     el.select();
                   });
                 }}
+                onInput={(e) => setRenameDraft(e.currentTarget.value)}
                 onKeyDown={(e) => {
                   e.stopPropagation();
                   if (e.key === "Enter") {
                     e.preventDefault();
-                    const next = e.currentTarget.value.trim();
-                    if (next && next !== ws.name) {
-                      props.onRename(ws.id, next);
-                    }
-                    setRenamingId(null);
+                    // Blur first so the commit happens once: the resulting
+                    // onBlur sees renameCommitted and no-ops.
+                    commitRename(ws);
+                    e.currentTarget.blur();
                   } else if (e.key === "Escape") {
                     e.preventDefault();
-                    setRenamingId(null);
+                    cancelRename();
+                    e.currentTarget.blur();
                   }
                 }}
-                onBlur={() => setRenamingId(null)}
+                // Blur commits like Enter — clicking elsewhere should keep
+                // the typed name, not silently discard it.
+                onBlur={() => commitRename(ws)}
               />
             </Show>
             <Show when={ws.dangerous_skip_permissions}>
@@ -324,7 +355,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
                 class="workspace-menu-item"
                 onClick={(e) => {
                   e.stopPropagation();
-                  setRenamingId(ws.id);
+                  startRename(ws);
                   setOpenMenuId(null);
                 }}
               >

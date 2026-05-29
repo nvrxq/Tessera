@@ -219,7 +219,7 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkspaceTask> {
 pub fn get_pomodoro(conn: &Connection, workspace_id: Uuid) -> Result<Option<PomodoroState>> {
     let mut stmt = conn.prepare_cached(
         "SELECT workspace_id, mode, started_at, paused_at, target_seconds, \
-                elapsed_seconds_before_pause, cycles_completed, updated_at \
+                elapsed_seconds_before_pause, cycles_completed, updated_at, paused_from \
          FROM workspace_pomodoro WHERE workspace_id = ?1",
     )?;
     stmt.query_row(params![workspace_id.to_string()], row_to_pomodoro)
@@ -233,8 +233,8 @@ pub fn upsert_pomodoro(conn: &Connection, state: &PomodoroState) -> Result<()> {
     conn.execute(
         "INSERT INTO workspace_pomodoro \
             (workspace_id, mode, started_at, paused_at, target_seconds, \
-             elapsed_seconds_before_pause, cycles_completed, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+             elapsed_seconds_before_pause, cycles_completed, updated_at, paused_from) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
          ON CONFLICT(workspace_id) DO UPDATE SET \
             mode = excluded.mode, \
             started_at = excluded.started_at, \
@@ -242,7 +242,8 @@ pub fn upsert_pomodoro(conn: &Connection, state: &PomodoroState) -> Result<()> {
             target_seconds = excluded.target_seconds, \
             elapsed_seconds_before_pause = excluded.elapsed_seconds_before_pause, \
             cycles_completed = excluded.cycles_completed, \
-            updated_at = excluded.updated_at",
+            updated_at = excluded.updated_at, \
+            paused_from = excluded.paused_from",
         params![
             state.workspace_id.to_string(),
             state.mode.as_str(),
@@ -252,6 +253,7 @@ pub fn upsert_pomodoro(conn: &Connection, state: &PomodoroState) -> Result<()> {
             state.elapsed_seconds_before_pause,
             state.cycles_completed,
             state.updated_at.to_rfc3339(),
+            state.paused_from.map(|m| m.as_str()),
         ],
     )?;
     Ok(())
@@ -263,6 +265,7 @@ fn row_to_pomodoro(row: &rusqlite::Row<'_>) -> rusqlite::Result<PomodoroState> {
     let started_s: Option<String> = row.get(2)?;
     let paused_s: Option<String> = row.get(3)?;
     let updated_s: String = row.get(7)?;
+    let paused_from_s: Option<String> = row.get(8)?;
     Ok(PomodoroState {
         workspace_id: parse_uuid(&ws_s, 0)?,
         mode: PomodoroMode::from_str(&mode_s).unwrap_or(PomodoroMode::Idle),
@@ -278,6 +281,7 @@ fn row_to_pomodoro(row: &rusqlite::Row<'_>) -> rusqlite::Result<PomodoroState> {
         elapsed_seconds_before_pause: row.get(5)?,
         cycles_completed: row.get(6)?,
         updated_at: parse_dt(&updated_s, 7)?,
+        paused_from: paused_from_s.map(|s| PomodoroMode::from_str(&s).unwrap_or(PomodoroMode::Work)),
     })
 }
 
@@ -296,7 +300,7 @@ fn row_to_pomodoro(row: &rusqlite::Row<'_>) -> rusqlite::Result<PomodoroState> {
 pub fn get_app_pomodoro(conn: &Connection) -> Result<PomodoroState> {
     let mut stmt = conn.prepare_cached(
         "SELECT mode, started_at, paused_at, target_seconds, \
-                elapsed_seconds_before_pause, cycles_completed, updated_at \
+                elapsed_seconds_before_pause, cycles_completed, updated_at, paused_from \
          FROM app_pomodoro WHERE id = 1",
     )?;
     let s = stmt
@@ -311,8 +315,8 @@ pub fn upsert_app_pomodoro(conn: &Connection, state: &PomodoroState) -> Result<(
     conn.execute(
         "INSERT INTO app_pomodoro \
             (id, mode, started_at, paused_at, target_seconds, \
-             elapsed_seconds_before_pause, cycles_completed, updated_at) \
-         VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+             elapsed_seconds_before_pause, cycles_completed, updated_at, paused_from) \
+         VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
          ON CONFLICT(id) DO UPDATE SET \
             mode = excluded.mode, \
             started_at = excluded.started_at, \
@@ -320,7 +324,8 @@ pub fn upsert_app_pomodoro(conn: &Connection, state: &PomodoroState) -> Result<(
             target_seconds = excluded.target_seconds, \
             elapsed_seconds_before_pause = excluded.elapsed_seconds_before_pause, \
             cycles_completed = excluded.cycles_completed, \
-            updated_at = excluded.updated_at",
+            updated_at = excluded.updated_at, \
+            paused_from = excluded.paused_from",
         params![
             state.mode.as_str(),
             state.started_at.map(|d| d.to_rfc3339()),
@@ -329,6 +334,7 @@ pub fn upsert_app_pomodoro(conn: &Connection, state: &PomodoroState) -> Result<(
             state.elapsed_seconds_before_pause,
             state.cycles_completed,
             state.updated_at.to_rfc3339(),
+            state.paused_from.map(|m| m.as_str()),
         ],
     )?;
     Ok(())
@@ -339,6 +345,7 @@ fn row_to_app_pomodoro(row: &rusqlite::Row<'_>) -> rusqlite::Result<PomodoroStat
     let started_s: Option<String> = row.get(1)?;
     let paused_s: Option<String> = row.get(2)?;
     let updated_s: String = row.get(6)?;
+    let paused_from_s: Option<String> = row.get(7)?;
     Ok(PomodoroState {
         workspace_id: Uuid::nil(),
         mode: PomodoroMode::from_str(&mode_s).unwrap_or(PomodoroMode::Idle),
@@ -354,6 +361,7 @@ fn row_to_app_pomodoro(row: &rusqlite::Row<'_>) -> rusqlite::Result<PomodoroStat
         elapsed_seconds_before_pause: row.get(4)?,
         cycles_completed: row.get(5)?,
         updated_at: parse_dt(&updated_s, 6)?,
+        paused_from: paused_from_s.map(|s| PomodoroMode::from_str(&s).unwrap_or(PomodoroMode::Work)),
     })
 }
 

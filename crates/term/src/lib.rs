@@ -12,7 +12,7 @@ pub mod grid;
 pub mod palette;
 pub mod term;
 pub use blocks::{Block, BlockEvent, BlockId, BlockSink};
-pub use cell::GridCell;
+pub use cell::{Grapheme, GridCell};
 pub use color::Color;
 pub use cursor::{CursorPos, CursorShape};
 pub use grid::Grid;

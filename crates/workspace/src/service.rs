@@ -384,6 +384,18 @@ impl WorkspaceService {
         rows: u16,
     ) -> Result<Uuid> {
         use tessera_pty::session::SessionConfig;
+        // Bind workspace identity to the PROCESS, not the on-disk folder.
+        // Two workspaces sharing one folder both write their UUID into the
+        // shared settings.local.json (last-write-wins), so the baked-in hook
+        // argv can't be trusted to identify the caller. Carrying the id in
+        // claude's env — which the hook subprocesses inherit — lets the hook
+        // command's `${TESSERA_WORKSPACE_ID:-<id>}` expansion resolve to the
+        // correct workspace per-process.
+        let mut env = env;
+        env.push((
+            "TESSERA_WORKSPACE_ID".to_string(),
+            workspace_id.to_string(),
+        ));
         let cfg = SessionConfig {
             program: program.to_string(),
             args: args.to_vec(),
@@ -487,7 +499,14 @@ impl WorkspaceService {
         std::fs::create_dir_all(&dir)?;
         let exe = tessera_exe.display().to_string();
         let id = workspace_id;
-        let cmd = |kind: &str| format!("{exe} hook {id} {kind}");
+        // Claude runs hook commands through a shell, so this expands
+        // per-process: a spawned claude carries its own workspace id in
+        // TESSERA_WORKSPACE_ID (set in spawn_session_inner), and its hook
+        // subprocesses inherit it. The `:-{id}` fallback keeps older binaries
+        // and any process spawned without the env working with the baked-in
+        // UUID. The surrounding double-quotes guard the expansion; the UUID
+        // has no shell-special chars, so this is valid JSON-embedded shell.
+        let cmd = |kind: &str| format!("{exe} hook \"${{TESSERA_WORKSPACE_ID:-{id}}}\" {kind}");
         let config = serde_json::json!({
             "hooks": {
                 "Stop": [{
@@ -593,6 +612,9 @@ mod tests {
         let stop_cmd = parsed["hooks"]["Stop"][0]["hooks"][0]["command"]
             .as_str()
             .unwrap();
+        // Identity is bound to the process via env, with the baked-in UUID
+        // kept as a fallback for older binaries / env-less spawns.
+        assert!(stop_cmd.contains("TESSERA_WORKSPACE_ID"));
         assert!(stop_cmd.contains(&ws.id.to_string()));
         assert!(stop_cmd.contains("/abs/path/to/tessera"));
     }

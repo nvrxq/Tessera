@@ -127,7 +127,20 @@ pub fn run() {
                 let handle = handle.clone();
                 let mut rx = supervisor.subscribe();
                 tauri::async_runtime::spawn(async move {
-                    while let Ok(evt) = rx.recv().await {
+                    loop {
+                        let evt = match rx.recv().await {
+                            Ok(evt) => evt,
+                            // Lagged is recoverable — the broadcast channel
+                            // dropped the oldest N messages because the pump
+                            // fell behind, but the next recv resumes. Bailing
+                            // here (the old `while let Ok`) killed the pump
+                            // permanently and froze all terminal output.
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                tracing::warn!(skipped = n, "pty pump lagged; dropped messages");
+                                continue;
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        };
                         match evt {
                             PtyEvent::Data { session_id, bytes } => {
                                 let (cols, rows) = sizes

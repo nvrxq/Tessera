@@ -44,6 +44,10 @@ const MIGRATIONS: &[Migration] = &[
         version: 9,
         sql: include_str!("../migrations/0009_claude_session_and_archive.sql"),
     },
+    Migration {
+        version: 10,
+        sql: include_str!("../migrations/0010_pomodoro_paused_from.sql"),
+    },
 ];
 
 pub fn apply(conn: &Connection) -> Result<()> {

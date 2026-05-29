@@ -118,6 +118,18 @@ const App: Component = () => {
       "--terminal-fg",
       cfg.terminal.foreground,
     );
+    // Apply the (previously dead) appearance controls. The UI font flows
+    // into --font-ui — overriding the static index.css default — and the
+    // density choice toggles a documentElement data attribute that the
+    // CSS reads to relax/compact spacing. Access defensively: the type
+    // lives in lib/settings.ts (another owner) and older persisted configs
+    // may predate the appearance block.
+    const uiFont = cfg.appearance?.ui_font_family;
+    if (uiFont) {
+      document.documentElement.style.setProperty("--font-ui", uiFont);
+    }
+    document.documentElement.dataset.density =
+      cfg.appearance?.density ?? "compact";
   });
 
   // ── In-app updater ─────────────────────────────────────────────
@@ -139,6 +151,10 @@ const App: Component = () => {
   void getVersion().then(setVersion).catch(() => setVersion("?"));
 
   const runUpdateCheck = async () => {
+    // Re-entrancy guard: a check (manual click or the 30-min poll) must not
+    // interrupt an in-progress download — resetting to "checking" would hide
+    // the progress UI and could kick off a SECOND concurrent download/relaunch.
+    if (updateState().kind === "downloading") return;
     setUpdateState({ kind: "checking" });
     try {
       const update = await checkForAppUpdate();
@@ -233,21 +249,33 @@ const App: Component = () => {
       });
     });
     unlistenStatus = await onWorkspaceStatus((evt) => {
+      // Equality guard: if the status is unchanged, return the SAME object
+      // reference so <For> doesn't dispose+recreate that row. Re-creating a
+      // row mid-rename would blow away the inline <input>'s live text.
       mutate((list) =>
         list?.map((w) =>
-          w.id === evt.workspace_id ? { ...w, agent_status: evt.agent_status } : w,
+          w.id === evt.workspace_id
+            ? w.agent_status === evt.agent_status
+              ? w
+              : { ...w, agent_status: evt.agent_status }
+            : w,
         ) ?? list,
       );
     });
     unlistenWorktree = await onWorkspaceWorktree((evt) => {
+      // Same equality guard as status — only swap the ref when a worktree
+      // field actually changed, so an idle re-detect doesn't churn the row.
       mutate((list) =>
         list?.map((w) =>
           w.id === evt.workspace_id
-            ? {
-                ...w,
-                detected_worktree: evt.detected_worktree,
-                detected_branch: evt.detected_branch,
-              }
+            ? w.detected_worktree === evt.detected_worktree &&
+              w.detected_branch === evt.detected_branch
+              ? w
+              : {
+                  ...w,
+                  detected_worktree: evt.detected_worktree,
+                  detected_branch: evt.detected_branch,
+                }
             : w,
         ) ?? list,
       );
@@ -284,19 +312,24 @@ const App: Component = () => {
     }
     const list = orderedWorkspaceList();
     if (list.length === 0) return;
-    if (e.key >= "1" && e.key <= "9") {
-      const idx = e.key.charCodeAt(0) - "1".charCodeAt(0);
+    // Match on the PHYSICAL key (e.code) rather than e.key: on AZERTY and
+    // other non-US layouts the digit row needs Shift, so e.key would be
+    // "&", "é", … instead of "1".."9". e.code is layout-independent, so the
+    // same physical 1-key works everywhere — and on US it's unchanged.
+    const digit = /^Digit([1-9])$/.exec(e.code);
+    if (digit) {
+      const idx = Number(digit[1]) - 1;
       if (idx >= list.length) return;
       e.preventDefault();
       e.stopImmediatePropagation();
       onSelect(list[idx].id);
       return;
     }
-    if (e.key === "]" || e.key === "[") {
+    if (e.code === "BracketRight" || e.code === "BracketLeft") {
       e.preventDefault();
       e.stopImmediatePropagation();
       const curIdx = list.findIndex((w) => w.id === selectedId());
-      const step = e.key === "]" ? 1 : -1;
+      const step = e.code === "BracketRight" ? 1 : -1;
       const base = curIdx < 0 ? (step > 0 ? -1 : 0) : curIdx;
       const next = ((base + step) % list.length + list.length) % list.length;
       onSelect(list[next].id);
@@ -368,15 +401,52 @@ const App: Component = () => {
   // resequence) and push the update to the backend. Optimistic: we mutate
   // the local list first, then call workspace_reorder; on failure we refetch.
   const onReorder = async (
-    _section: "active" | "passive",
+    section: "active" | "passive",
     orderedIds: string[],
   ) => {
-    // Recompute sort_order with a gap of 10 between rows so a future
-    // single-row insert can land between two neighbours without
-    // triggering a full resequence. Wire shape is named-struct to
-    // match Rust `ReorderEntry` (see lib/workspaces.ts).
-    const updates = orderedIds.map((id, idx) => ({
-      workspace_id: id,
+    // sort_order is a SINGLE global column, but the sidebar shows two
+    // sections (active = has session_id, passive = none). If we only
+    // sequenced the reordered section's ids, both sections would reuse
+    // 10,20,30… and collide — so positions jump whenever a workspace
+    // crosses sections (session start/stop, restart). Fix: rebuild the
+    // FULL display order, splice the new section order into its slice,
+    // then assign one monotonic gapped sequence across the whole list so
+    // every sort_order is globally unique and stable.
+    const full = orderedWorkspaceList();
+    const reorderedSet = new Set(orderedIds);
+    // Guard against a section-membership shift between the drag start (when
+    // the Sidebar captured orderedIds) and now — e.g. a session started or
+    // ended mid-drag, moving a row active↔passive. If the count no longer
+    // matches, the positional consumption below would consume an orderedId
+    // for a row that's no longer in the section, duplicating one id and
+    // dropping another. Bail to a server refetch rather than persist a
+    // corrupted order.
+    const inSectionCount = full.filter(
+      (w) =>
+        (section === "active" ? w.session_id != null : w.session_id == null) &&
+        reorderedSet.has(w.id),
+    ).length;
+    if (inSectionCount !== orderedIds.length) {
+      refetch();
+      return;
+    }
+    // Walk the full display order; where the reordered section's rows sit,
+    // emit them in the NEW order (consumed left-to-right), leaving the
+    // other section's rows untouched in place.
+    let cursor = 0;
+    const merged: WorkspaceDto[] = full.map((w) => {
+      const inSection =
+        (section === "active" ? w.session_id != null : w.session_id == null) &&
+        reorderedSet.has(w.id);
+      if (!inSection) return w;
+      const id = orderedIds[cursor++];
+      return full.find((x) => x.id === id)!;
+    });
+    // Gap of 10 between rows so a future single-row insert can land between
+    // two neighbours without a full resequence. Wire shape is named-struct
+    // to match Rust `ReorderEntry` (see lib/workspaces.ts).
+    const updates = merged.map((w, idx) => ({
+      workspace_id: w.id,
       sort_order: (idx + 1) * 10,
     }));
     const order = new Map(updates.map((u) => [u.workspace_id, u.sort_order]));
@@ -529,7 +599,17 @@ const App: Component = () => {
               type="button"
               class="topmeta-version"
               onClick={() => void runUpdateCheck()}
-              title="Click to check for updates"
+              // Disable while a check/download is already in flight so a stray
+              // click can't restart the check or spawn a second download.
+              disabled={
+                updateState().kind === "checking" ||
+                updateState().kind === "downloading"
+              }
+              title={
+                updateState().kind === "downloading"
+                  ? "Update in progress…"
+                  : "Click to check for updates"
+              }
             >
               v{version() || "…"}
             </button>
