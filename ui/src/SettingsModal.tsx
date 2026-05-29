@@ -39,7 +39,13 @@ export interface SettingsModalProps {
   onClose: () => void;
 }
 
-type SectionId = "theme" | "appearance" | "terminal" | "cursor" | "behavior";
+type SectionId =
+  | "theme"
+  | "appearance"
+  | "terminal"
+  | "cursor"
+  | "behavior"
+  | "shortcuts";
 
 const FONT_OPTIONS = [
   '"Geist Mono", ui-monospace, Menlo, monospace',
@@ -276,6 +282,12 @@ const SettingsModal: Component<SettingsModalProps> = (props) => {
               current={section()}
               onSelect={setSection}
             />
+            <SectionLink
+              id="shortcuts"
+              label="Shortcuts"
+              current={section()}
+              onSelect={setSection}
+            />
           </nav>
 
           <div class="settings-pane">
@@ -293,6 +305,9 @@ const SettingsModal: Component<SettingsModalProps> = (props) => {
             </Show>
             <Show when={section() === "behavior"}>
               <BehaviorSection draft={draft()} patch={patch} />
+            </Show>
+            <Show when={section() === "shortcuts"}>
+              <ShortcutsSection />
             </Show>
           </div>
 
@@ -407,6 +422,61 @@ const ThemeSection: Component = () => (
               <span class="theme-card-active">active</span>
             </Show>
           </button>
+        )}
+      </For>
+    </div>
+  </div>
+);
+
+// Keyboard shortcut reference. Read-only for now — these are the terminal
+// keybindings wired in lib/rendererPool.ts. Mirrors what the user can press;
+// configurability can come later.
+const IS_MAC =
+  typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.userAgent);
+
+const SHORTCUTS: { keys: string[]; action: string }[] = [
+  { keys: [IS_MAC ? "⌘" : "Ctrl", "+"], action: "Zoom terminal font in" },
+  { keys: [IS_MAC ? "⌘" : "Ctrl", "−"], action: "Zoom terminal font out" },
+  { keys: [IS_MAC ? "⌘" : "Ctrl", "0"], action: "Reset terminal font size" },
+  {
+    keys: IS_MAC ? ["⌘", "C"] : ["Ctrl", "Shift", "C"],
+    action: "Copy selection",
+  },
+  {
+    keys: IS_MAC ? ["⌘", "V"] : ["Ctrl", "Shift", "V"],
+    action: "Paste",
+  },
+  { keys: ["Ctrl", "C"], action: "Interrupt (SIGINT) — passed to Claude" },
+  { keys: ["⌥", "← / →"], action: "Move cursor by word" },
+  {
+    keys: IS_MAC ? ["⌥", "⌫"] : ["Ctrl", "⌫"],
+    action: "Delete previous word",
+  },
+  { keys: ["⇧", "Enter"], action: "Soft newline (Claude prompt)" },
+  ...(IS_MAC
+    ? [
+        { keys: ["⌘", "← / →"], action: "Jump to line start / end" },
+        { keys: ["⌘", "⌫"], action: "Delete to line start" },
+      ]
+    : []),
+];
+
+const ShortcutsSection: Component = () => (
+  <div class="settings-section">
+    <h3 class="settings-section-title">Shortcuts</h3>
+    <p class="theme-hint">
+      Terminal keybindings. Bare <span class="kbd">Ctrl</span>
+      <span class="kbd">C</span> is left untouched so it still interrupts Claude.
+    </p>
+    <div class="shortcut-list">
+      <For each={SHORTCUTS}>
+        {(s) => (
+          <div class="shortcut-row">
+            <span class="shortcut-keys">
+              <For each={s.keys}>{(k) => <span class="kbd">{k}</span>}</For>
+            </span>
+            <span class="shortcut-action">{s.action}</span>
+          </div>
         )}
       </For>
     </div>

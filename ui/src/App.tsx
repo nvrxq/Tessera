@@ -16,7 +16,7 @@ import { check as checkForAppUpdate, type Update } from "@tauri-apps/plugin-upda
 import Sidebar from "./Sidebar";
 import NewWorkspaceForm from "./NewWorkspaceForm";
 import ProjectsSettings from "./ProjectsSettings";
-import Terminal from "./Terminal";
+import WorkspacePanes from "./WorkspacePanes";
 // Modals are heavy and opened on demand. Lazy-load them so the initial
 // bundle drops the SettingsModal/ClaudeInventoryModal/WorkspaceExtrasPanel
 // payloads — the first click pays a one-frame fetch, every subsequent open
@@ -764,8 +764,9 @@ const App: Component = () => {
                     <rect x="17" y="4" width="4" height="16" rx="1" fill="currentColor" />
                   </svg>
                 </button>
-                <Terminal
+                <WorkspacePanes
                   workspaceId={selected()!.id}
+                  cwd={selected()!.worktree_path}
                   sessionId={selected()?.session_id ?? null}
                   onSpawned={(sid) => onTerminalSpawned(selected()!.id, sid)}
                 />

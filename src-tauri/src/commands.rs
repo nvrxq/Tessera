@@ -45,6 +45,33 @@ pub fn pty_spawn(
     Ok(SpawnResponse { session_id })
 }
 
+/// Spawn a login shell in `cwd` for a split companion pane. The shell is the
+/// user's `$SHELL` (falling back to `/bin/bash`); TERM/COLORTERM are set so it
+/// renders in colour. Unlike `workspace_spawn_agent` this does NOT become the
+/// workspace's tracked claude session — it's an independent pane PTY.
+#[tauri::command]
+pub fn pty_spawn_shell(
+    state: State<'_, SupervisorState>,
+    cwd: String,
+    cols: u16,
+    rows: u16,
+) -> Result<SpawnResponse, String> {
+    let program = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+    let cfg = SessionConfig {
+        program,
+        args: vec!["-l".to_string()],
+        cwd: PathBuf::from(cwd),
+        cols,
+        rows,
+        env: vec![
+            ("TERM".to_string(), "xterm-256color".to_string()),
+            ("COLORTERM".to_string(), "truecolor".to_string()),
+        ],
+    };
+    let session_id = state.spawn(cfg).map_err(|e| e.to_string())?;
+    Ok(SpawnResponse { session_id })
+}
+
 #[tauri::command]
 pub fn pty_write(
     state: State<'_, SupervisorState>,
