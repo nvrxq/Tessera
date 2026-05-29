@@ -278,24 +278,17 @@ pub fn workspace_list(
 #[tauri::command]
 pub fn workspace_spawn_agent(
     state: State<'_, WorkspaceServiceState>,
-    sizes: State<'_, GridSizesState>,
     workspace_id: Uuid,
     cols: u16,
     rows: u16,
 ) -> Result<Uuid, String> {
-    let session_id = state
+    // The PTY is spawned at (cols, rows); the frontend then attaches via
+    // `terminal_attach` and drives subsequent sizing through `pty_resize`
+    // (xterm FitAddon). The replay ring covers any output produced between
+    // spawn and attach.
+    state
         .spawn_agent(workspace_id, cols, rows)
-        .map_err(|e| e.to_string())?;
-    // Pre-register the grid size so the PTY pump builds the wezterm-term
-    // parser at the correct dimensions on the FIRST byte chunk. Without this,
-    // any output arriving before the frontend's follow-up `terminal_resize`
-    // makes `feed()` create the parser at the default 80×24, so claude's first
-    // paint renders at the wrong size and then jumps — a visible artifact.
-    sizes
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(session_id, (cols, rows));
-    Ok(session_id)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -414,69 +407,26 @@ pub fn workspace_assign_project(
         .map_err(|e| e.to_string())
 }
 
-// ---- Terminal grid (Canvas2D backend) ----
+// ---- Terminal (xterm.js byte stream) ----
 
-use std::collections::HashMap;
+use crate::ptystream::PtyStreamRegistry;
+use tauri::ipc::{Channel, Response};
 
-use crate::terminal::TerminalRegistry;
+pub type PtyStreamRegistryState = std::sync::Arc<PtyStreamRegistry>;
 
-pub type TerminalRegistryState = std::sync::Arc<TerminalRegistry>;
-/// Last-known (cols, rows) per session — used by the PTY pump to spawn a
-/// Term at the right size on the first byte chunk.
-pub type GridSizesState = std::sync::Arc<Mutex<HashMap<Uuid, (u16, u16)>>>;
-/// Sessions marked dirty since the last render tick. Shared with the pump
-/// task so `terminal_resize` can wake an idle session that has no PTY
-/// output of its own.
-pub type DirtySet = std::sync::Arc<Mutex<std::collections::HashSet<Uuid>>>;
-
-/// Frontend tells the backend the desired grid size for a session. Resizes
-/// both the wezterm-term parser AND remembers the size for any future
-/// lazy-spawned Term in the same session id.
-///
-/// Marks the session dirty so the 1 ms render-tick picks it up immediately
-/// — `registry.resize()` clears `last_cells`, so the next snapshot is a
-/// full one carrying the new grid dimensions. Without the dirty mark, an
-/// idle session (no PTY output) would not re-snapshot until the next byte.
+/// Bind a frontend byte Channel to a PTY session. The backend replays the
+/// session's buffered output (so xterm.js rebuilds the current screen, even
+/// though the PTY was spawned before `<Terminal>` mounted) and then streams
+/// live PTY bytes to it. xterm owns parsing + rendering; resize goes through
+/// `pty_resize` (driven by the frontend FitAddon).
 #[tauri::command]
-pub fn terminal_resize(
-    _app: tauri::AppHandle,
-    registry: tauri::State<'_, TerminalRegistryState>,
-    sizes: tauri::State<'_, GridSizesState>,
-    dirty: tauri::State<'_, DirtySet>,
+pub fn terminal_attach(
+    stream: tauri::State<'_, PtyStreamRegistryState>,
     session_id: Uuid,
-    cols: u16,
-    rows: u16,
+    on_data: Channel<Response>,
 ) -> Result<(), String> {
-    sizes
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(session_id, (cols, rows));
-    registry.resize(session_id, cols, rows);
-    dirty
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(session_id);
+    stream.attach(session_id, on_data);
     Ok(())
-}
-
-/// Move the terminal's scroll view. Positive `delta_back` scrolls into
-/// history; negative pulls back toward the live tail. Resulting offset is
-/// clamped to the scrollback buffer's size. Re-emits a fresh `term_snapshot`
-/// so the frontend repaints the new view immediately. Any subsequent PTY
-/// data automatically resets the offset to 0 (live tail) inside `feed`.
-#[tauri::command]
-pub fn terminal_scroll(
-    app: tauri::AppHandle,
-    registry: tauri::State<'_, TerminalRegistryState>,
-    session_id: Uuid,
-    delta_back: i32,
-) -> Result<usize, String> {
-    use tauri::Emitter;
-    let new_offset = registry.set_scroll_delta(session_id, delta_back);
-    if let Some(snap) = registry.snapshot(session_id) {
-        let _ = app.emit("term_snapshot", snap);
-    }
-    Ok(new_offset)
 }
 
 // ---- Settings ----
@@ -489,33 +439,23 @@ pub fn settings_load() -> Result<UserConfig, String> {
     Ok(UserConfig::load_or_default(&config_path()))
 }
 
-/// Persist the settings and notify the frontend so live changes (palette,
-/// font, cursor) apply without a restart. The backend palette is hot-swapped
-/// here too — the next `term_snapshot` for every live session re-emits a
-/// `full` payload with the new colours.
+/// Persist the settings and notify the frontend so live changes (theme,
+/// font, cursor) apply without a restart. The terminal theme is now owned by
+/// the frontend (xterm `ITheme`), so the backend just persists + broadcasts.
 #[tauri::command]
-pub fn settings_save(
-    app: tauri::AppHandle,
-    registry: tauri::State<'_, TerminalRegistryState>,
-    config: UserConfig,
-) -> Result<(), String> {
+pub fn settings_save(app: tauri::AppHandle, config: UserConfig) -> Result<(), String> {
     // Normalize the in-memory copy too (not just the on-disk clamp inside
-    // `save`), so the live `settings_changed` event and the hot-swapped
-    // palette carry the same clamped values the disk does — otherwise a
-    // programmatic/hand-edited out-of-range font size would render live until
-    // the next reload re-read the (clamped) file.
+    // `save`), so the live `settings_changed` event carries the same clamped
+    // values the disk does — otherwise a programmatic/hand-edited out-of-range
+    // font size would render live until the next reload re-read the file.
     let mut config = config;
     config.normalize();
     let path = config_path();
     config.save(&path).map_err(|e| e.to_string())?;
 
-    let palette = crate::terminal::palette_from_config(&config);
-    registry.set_palette(palette);
-
     // Event is the only signal — UI components subscribe and re-derive
-    // their CSS variables, font sizes, etc. We send the new config as
-    // the event payload so subscribers don't have to round-trip back to
-    // disk on every change.
+    // their CSS variables, font sizes, terminal theme, etc. We send the new
+    // config as the event payload so subscribers don't round-trip to disk.
     let _ = app.emit("settings_changed", &config);
     Ok(())
 }

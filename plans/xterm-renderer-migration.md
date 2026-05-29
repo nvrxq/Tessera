@@ -59,6 +59,42 @@ layer rather than patching it cell-by-cell.
    they smoke-test, then release v0.1.13.
 
 ## License
-xterm.js + addons are MIT (used as npm deps — no copying). Terax is Apache-2.0;
-we only reference their wiring pattern, not their source. No attribution burden
-beyond the npm packages' own licenses.
+xterm.js + addons are MIT (used as npm deps). Terax is Apache-2.0 — since the user
+asked to copy their code directly, we DO copy renderer/keymap/theme logic and add a
+NOTICE crediting crynta/terax-ai (Apache-2.0 §4 attribution). Tessera is also
+Apache-2.0, so it's compatible.
+
+---
+
+## CONCRETE DESIGN (branch feat/xterm-renderer, 2026-05-29)
+
+### Backend (src-tauri) — verifiable here via cargo
+- NEW `src-tauri/src/ptystream.rs`: `PtyStreamRegistry` = per-session
+  `{ ring: VecDeque<u8> capped ~512KB, channel: Option<Channel<tauri::ipc::Response>> }`.
+  - `feed(sid,&[u8])`: append to ring (drop-oldest past cap) + if a channel is
+    attached, send the bytes as `Response::new(...)`.
+  - `attach(sid, channel)`: replay the ring into the channel, then store it (so a
+    late-attaching frontend still gets the welcome screen / history).
+  - `remove(sid)`.
+- NEW command `terminal_attach(session_id, on_data: Channel<Response>)`.
+- lib.rs pump: Data -> stream.feed; Exit -> stream.remove + emit pty_event.
+  DELETE the 1ms snapshot tick task, DirtySet, GridSizes, bench.
+- DELETE: terminal_resize, terminal_scroll, term_snapshot, Snapshot, WireCell,
+  TerminalRegistry. KEEP pty_write, pty_resize (PTY winsize), pty_kill,
+  workspace_spawn_agent (identity), hooks, settings, extras, inventory.
+- crates/term parser becomes unused -> drop dep from src-tauri.
+
+### Frontend (ui) — NOT verifiable here (guarded installer, no GUI); USER builds
+- package.json: add the @xterm/* renderer + addons.
+- NEW ui/src/lib/xtermKeymap.ts — copy Terax keymap.ts verbatim (framework-agnostic).
+- NEW ui/src/lib/terminalTheme.ts — copy Terax, map Tessera settings palette -> ITheme.
+- REWRITE Terminal.tsx (SolidJS): create Terminal+FitAddon+WebglAddon+WebLinks+Search+
+  Serialize into a div; attach via the byte Channel -> term.write; term.onData ->
+  pty_write; ResizeObserver+FitAddon -> pty_resize; attachCustomKeyEventHandler (IME 229
+  guard, word/line nav, ctrl+shift+c/v, shift-enter) copied from Terax rendererPool.
+  KEEP overlays (loading/connecting/exited+Restart/error), drag-drop paste, settings
+  effect, pty_event exit. DELETE the Canvas2D painter entirely.
+
+### Verify
+- cargo test/clippy/fmt (backend) — me.
+- USER smoke-tests a dev build, then we release v0.1.13. Never ship the swap blind.

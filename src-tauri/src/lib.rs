@@ -1,5 +1,5 @@
 mod commands;
-mod terminal;
+mod ptystream;
 
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
@@ -9,12 +9,7 @@ use tessera_pty::{PtyEvent, Supervisor};
 use tessera_workspace::WorkspaceService;
 use tracing_subscriber::EnvFilter;
 
-use crate::terminal::TerminalRegistry;
-
-/// Tracks last-known grid size per session so the PTY-pump thread can spawn
-/// a Term with the right dimensions on the first chunk. Updated by the
-/// frontend via `terminal_resize`.
-type GridSizes = Arc<Mutex<std::collections::HashMap<uuid::Uuid, (u16, u16)>>>;
+use crate::ptystream::PtyStreamRegistry;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -46,23 +41,12 @@ pub fn run() {
         worktree_root,
     ));
 
-    let registry: Arc<TerminalRegistry> = Arc::new(TerminalRegistry::new());
-    let grid_sizes: GridSizes = Arc::new(Mutex::new(std::collections::HashMap::new()));
+    // Raw PTY-byte streaming to the frontend's xterm.js renderer. The palette
+    // / theme now lives entirely on the frontend (xterm `ITheme`), so the
+    // backend no longer resolves colours.
+    let stream: Arc<PtyStreamRegistry> = Arc::new(PtyStreamRegistry::new());
     let inventory_cache: commands::ClaudeInventoryCacheState =
         Arc::new(commands::ClaudeInventoryCache::default());
-    // Shared between the pump task and `terminal_resize`. Resize MUST be
-    // able to mark a session dirty so an idle session (no PTY output)
-    // still re-snapshots after a window resize.
-    let dirty: commands::DirtySet = Arc::new(Mutex::new(std::collections::HashSet::new()));
-
-    // Apply persisted user settings to the registry's live palette so the
-    // first snapshot already paints with the user's customised colours.
-    // (Settings might also be absent — that just leaves the tessera_dark
-    // default in place.)
-    {
-        let cfg = tessera_core::UserConfig::load_or_default(&tessera_core::config::config_path());
-        registry.set_palette(crate::terminal::palette_from_config(&cfg));
-    }
 
     let socket_path = data_dir.join("hooks.sock");
 
@@ -86,44 +70,20 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .manage(supervisor.clone())
         .manage(workspace_service.clone())
-        .manage(registry.clone())
-        .manage(grid_sizes.clone())
+        .manage(stream.clone())
         .manage(inventory_cache.clone())
-        .manage(dirty.clone())
         .manage::<commands::DbState>(db.clone())
         .setup(move |app| {
             let handle = app.handle().clone();
 
-            // PTY → Term parser → frontend snapshot — two coordinated tasks.
-            //
-            // Pump task: drain PTY events as fast as they arrive, feeding
-            // bytes into the parser. Each Data chunk marks the session
-            // "dirty" but does NOT emit a snapshot — emitting on every byte
-            // burns CPU serialising a ~30 KB JSON payload per keystroke
-            // (1920 cells × 4 fields), which was responsible for the
-            // unusable input lag in the first cut.
-            //
-            // Render-tick task: wakes at 60 Hz, snapshots and emits only the
-            // sessions that became dirty since the last tick. This caps
-            // peak IPC at the display refresh rate, regardless of how fast
-            // claude floods the PTY (it can redraw the whole alt-screen 5×
-            // per frame; the user only ever sees one).
-            // 2 ms tick — empirically fastest configuration (Notify+gap was
-            // slower in practice because the post-emit sleep starved sustained
-            // claude streams). Idle cost: ~500 µs/sec of CPU.
-            //
-            // Per-byte latency budget on the backend side: ≤2 ms wait for
-            // the next tick + ~50 µs snapshot + ~100 µs JSON emit = ~2.2 ms.
-            // Frontend then has ~16 ms display-refresh floor.
-            let pty_seen_at: std::sync::Arc<
-                std::sync::Mutex<std::collections::HashMap<uuid::Uuid, std::time::Instant>>,
-            > = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
-            let bench_enabled = std::env::var("TESSERA_BENCH").is_ok();
+            // PTY pump: drain PTY output and forward raw bytes to the
+            // frontend's xterm.js renderer through the per-session IPC Channel
+            // registered by `terminal_attach`. xterm owns VT parsing + render,
+            // so there's no snapshot/diff tick anymore — just a byte forward
+            // plus a small replay ring (see ptystream) so a late-mounting
+            // <Terminal> still gets the session's history.
             {
-                let reg = registry.clone();
-                let sizes = grid_sizes.clone();
-                let dirty = dirty.clone();
-                let seen = pty_seen_at.clone();
+                let stream = stream.clone();
                 let handle = handle.clone();
                 let mut rx = supervisor.subscribe();
                 tauri::async_runtime::spawn(async move {
@@ -133,8 +93,7 @@ pub fn run() {
                             // Lagged is recoverable — the broadcast channel
                             // dropped the oldest N messages because the pump
                             // fell behind, but the next recv resumes. Bailing
-                            // here (the old `while let Ok`) killed the pump
-                            // permanently and froze all terminal output.
+                            // here would freeze terminal output permanently.
                             Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                                 tracing::warn!(skipped = n, "pty pump lagged; dropped messages");
                                 continue;
@@ -143,37 +102,10 @@ pub fn run() {
                         };
                         match evt {
                             PtyEvent::Data { session_id, bytes } => {
-                                let (cols, rows) = sizes
-                                    .lock()
-                                    .unwrap_or_else(|e| e.into_inner())
-                                    .get(&session_id)
-                                    .copied()
-                                    .unwrap_or((80, 24));
-                                let t_recv = std::time::Instant::now();
-                                if reg.feed(session_id, cols, rows, &bytes) {
-                                    // Capture the FIRST byte-arrival in a
-                                    // tick window; the emitter task reads
-                                    // it back to compute end-to-end latency.
-                                    seen.lock().unwrap().entry(session_id).or_insert(t_recv);
-                                    dirty
-                                        .lock()
-                                        .unwrap_or_else(|e| e.into_inner())
-                                        .insert(session_id);
-                                }
+                                stream.feed(session_id, &bytes);
                             }
                             PtyEvent::Exit { session_id } => {
-                                reg.remove(session_id);
-                                sizes
-                                    .lock()
-                                    .unwrap_or_else(|e| e.into_inner())
-                                    .remove(&session_id);
-                                dirty
-                                    .lock()
-                                    .unwrap_or_else(|e| e.into_inner())
-                                    .remove(&session_id);
-                                seen.lock()
-                                    .unwrap_or_else(|e| e.into_inner())
-                                    .remove(&session_id);
+                                stream.remove(session_id);
                                 let _ = handle.emit(
                                     "pty_event",
                                     serde_json::json!({
@@ -181,59 +113,6 @@ pub fn run() {
                                         "session_id": session_id,
                                     }),
                                 );
-                            }
-                        }
-                    }
-                });
-            }
-            {
-                let handle = handle.clone();
-                let reg = registry.clone();
-                let dirty = dirty.clone();
-                let seen = pty_seen_at.clone();
-                tauri::async_runtime::spawn(async move {
-                    let mut tick = tokio::time::interval(std::time::Duration::from_millis(1));
-                    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-                    loop {
-                        tick.tick().await;
-                        let to_snap: Vec<uuid::Uuid> = {
-                            let mut d = dirty.lock().unwrap_or_else(|e| e.into_inner());
-                            if d.is_empty() {
-                                continue;
-                            }
-                            let v: Vec<_> = d.iter().copied().collect();
-                            d.clear();
-                            v
-                        };
-                        for sid in to_snap {
-                            let t_pty = seen.lock().unwrap_or_else(|e| e.into_inner()).remove(&sid);
-                            let t_snap_start = std::time::Instant::now();
-                            if let Some(snap) = reg.snapshot(sid) {
-                                let t_snap = t_snap_start.elapsed();
-                                let t_emit_start = std::time::Instant::now();
-                                let _ = handle.emit("term_snapshot", snap);
-                                let t_emit = t_emit_start.elapsed();
-                                if bench_enabled {
-                                    // Capture `total` BEFORE deriving
-                                    // wait, so the breakdown actually adds
-                                    // up: total = wait + snap + emit. The
-                                    // earlier version called `t_pty.elapsed()`
-                                    // twice at different points so the
-                                    // numbers drifted by ~µs and the row
-                                    // didn't reconcile.
-                                    let total_us =
-                                        t_pty.map(|t| t.elapsed().as_micros()).unwrap_or(0);
-                                    let wait_us = total_us
-                                        .saturating_sub(t_snap.as_micros())
-                                        .saturating_sub(t_emit.as_micros());
-                                    eprintln!(
-                                        "[bench] wait={}µs  snap={}µs  emit={}µs  total={}µs",
-                                        wait_us,
-                                        t_snap.as_micros(),
-                                        t_emit.as_micros(),
-                                        total_us,
-                                    );
-                                }
                             }
                         }
                     }
@@ -311,10 +190,9 @@ pub fn run() {
             commands::project_delete,
             commands::workspace_reorder,
             commands::workspace_assign_project,
-            commands::terminal_resize,
+            commands::terminal_attach,
             commands::list_directories,
             commands::save_paste_image,
-            commands::terminal_scroll,
             commands::workspace_links_list,
             commands::workspace_links_add,
             commands::workspace_links_delete,
