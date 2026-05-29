@@ -1,0 +1,17 @@
+Tessera
+Copyright (c) nvrxq
+
+This product includes terminal-rendering code adapted/copied from Terax
+(https://github.com/crynta/terax-ai), licensed under the Apache License,
+Version 2.0. Portions reused:
+
+  - The xterm.js + WebGL renderer wiring, IME-composition guard, copy/paste
+    and keymap handling   (Terax src/modules/terminal/lib/rendererPool.ts,
+    keymap.ts)  ->  ui/src/Terminal.tsx, ui/src/lib/xtermKeymap.ts
+  - The xterm ITheme mapping shape  (Terax src/styles/terminalTheme.ts)
+    ->  ui/src/lib/terminalTheme.ts
+  - The raw-PTY-byte IPC Channel streaming approach
+    (Terax src-tauri/src/modules/pty)  ->  src-tauri/src/ptystream.rs
+
+xterm.js and its addons (@xterm/*) are © The xterm.js authors, MIT licensed,
+and are used as npm dependencies.
