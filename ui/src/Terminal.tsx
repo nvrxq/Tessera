@@ -381,10 +381,16 @@ export default function Terminal(props: TerminalProps) {
    * Covers the canvas (z-index 2) so we don't briefly flash an empty grid
    * while claude is cold-starting. */
   const [phase, setPhase] = createSignal<
-    "spawning" | "connecting" | "ready" | "error"
+    "spawning" | "connecting" | "ready" | "error" | "exited"
   >(props.sessionId ? "connecting" : "spawning");
   // Human-readable reason when phase === "error" (e.g. claude not on PATH).
   const [spawnError, setSpawnError] = createSignal<string | null>(null);
+  // Session ids whose claude process has exited. When a `pty_event` exit lands
+  // for the active session we show the "exited" overlay instead of leaving a
+  // blank canvas; when the user later re-selects a workspace whose claude died
+  // in the background, `createEffect` consults this set so it doesn't bind to
+  // a dead session that will never paint (a terminal that "just vanished").
+  const exitedSessions = new Set<string>();
 
   function measureCell(dpr: number) {
     const ctx = ctx2dOf();
@@ -467,8 +473,21 @@ export default function Terminal(props: TerminalProps) {
     // If we DID resize, the canvas is now blank. Repaint immediately
     // from the local grid mirror so there's no black-flash window
     // between the resize and the next `term_snapshot` arrival.
-    if (dimsChanged && grid.length > 0) {
-      paintFull(fontPx * dpr);
+    if (dimsChanged) {
+      if (grid.length > 0) {
+        paintFull(fontPx * dpr);
+      } else {
+        // No grid yet — a resize during the spawn/connect window (before the
+        // first snapshot). The freshly-sized backing store is transparent,
+        // which an `alpha:false` context shows as black. Fill it with the
+        // themed terminal background so launch shows the warm dark bg under
+        // the loading overlay instead of a black flash.
+        const ctx = ctx2dOf();
+        if (ctx) {
+          ctx.fillStyle = bgHex;
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+      }
     }
   }
 
@@ -738,7 +757,7 @@ export default function Terminal(props: TerminalProps) {
     }
     const px = fontPx * (window.devicePixelRatio || 1);
     const sizeChanged = snap.cols !== gridCols || snap.rows !== gridRows;
-    if (snap.full || sizeChanged) {
+    if (snap.full) {
       gridCols = snap.cols;
       gridRows = snap.rows;
       grid = snap.cells.slice();
@@ -754,6 +773,17 @@ export default function Terminal(props: TerminalProps) {
         }
       }
       paintFull(px);
+    } else if (sizeChanged) {
+      // A DELTA whose geometry doesn't match our mirror. This happens right
+      // after a session switch: `setActiveSession` resets gridCols/gridRows
+      // to 0, and the 1 ms tick can emit a delta for the new session before
+      // our `terminal_resize` round-trip forces a `full`. A delta carries
+      // ONLY changed cells, so treating its partial `cells` as the whole grid
+      // (the old `snap.full || sizeChanged` branch did exactly that) paints a
+      // mostly-blank, garbled frame — the "artifacts" and "half the terminal
+      // vanished" the user reported. Drop it; the resize guarantees a `full`
+      // arrives momentarily and re-baselines cleanly.
+      return;
     } else {
       // Delta: patch changed cells and repaint just those.
       const ctx = ctx2dOf();
@@ -942,6 +972,27 @@ export default function Terminal(props: TerminalProps) {
   });
   const listenerReady: Promise<void> = listenerPromise.then((u) => {
     unlisten = u;
+  });
+
+  // Register the PTY-exit listener SYNCHRONOUSLY (same reasoning as the
+  // snapshot listener above). If it were deferred until after `await
+  // listenerReady` inside onMount, a claude that crashes the instant it
+  // launches could emit its `pty_event` exit before the listener exists — the
+  // event would be lost and the overlay would hang on "connecting" forever
+  // with no Restart affordance. Recording the exit here also lets the
+  // workspace createEffect avoid binding a session that died in the background.
+  let ptyUnlisten: UnlistenFn | null = null;
+  const ptyListenerPromise = listen<{ kind: string; session_id: string }>(
+    "pty_event",
+    (event) => {
+      const { kind, session_id } = event.payload;
+      if (kind !== "exit") return;
+      exitedSessions.add(session_id);
+      if (session_id === activeSessionId) setPhase("exited");
+    },
+  );
+  void ptyListenerPromise.then((u) => {
+    ptyUnlisten = u;
   });
 
   onMount(() => {
@@ -1267,6 +1318,10 @@ export default function Terminal(props: TerminalProps) {
         // switched workspaces — bind the session and notify the parent only
         // while this is still the active workspace.
         if (props.workspaceId === ws) {
+          // A freshly spawned session is live by definition; drop any stale
+          // "exited" mark (e.g. on Restart the new id can't collide, but this
+          // keeps the set honest).
+          exitedSessions.delete(newSid);
           setActiveSession(newSid);
           setPhase("connecting");
           await invoke("terminal_resize", { sessionId: newSid, cols, rows });
@@ -1298,14 +1353,33 @@ export default function Terminal(props: TerminalProps) {
   createEffect(() => {
     const ws = props.workspaceId;
     const sid = props.sessionId;
-    // Workspace changed — assume we need to reload until a snapshot
-    // arrives. Skip the reset if the same session is already ready.
-    if (phase() === "ready" && sid !== activeSessionId) {
+    // A spawn is already in flight for this workspace (initial spawn, App
+    // pre-spawn adoption, or a Restart). `attemptSpawn` owns the bind: it
+    // setActiveSession()s + forces a full once claude is up. Bailing here keeps
+    // an unrelated reactive tick during the async spawn from re-running the
+    // logic below — which (while props.sessionId still holds the OLD/dead id)
+    // would otherwise revert the overlay to "exited" or rebind a dead session.
+    if (spawning.has(ws)) return;
+    // The bound target changed (workspace switch, spawn result, or session
+    // exit). Re-derive the overlay state. Gating on `sid !== activeSessionId`
+    // means an unrelated reactive tick (status churn, settings) that leaves
+    // the target unchanged is a no-op and won't clobber an in-progress spawn.
+    if (sid !== activeSessionId) {
+      // Don't bind to a session we already know is dead — e.g. re-selecting a
+      // workspace whose claude exited in the background. Binding would clear
+      // the canvas and wait forever for a snapshot that never comes (the
+      // "terminal vanished" report). Show the restart overlay instead.
+      if (sid && exitedSessions.has(sid)) {
+        setActiveSession(null);
+        setPhase("exited");
+        return;
+      }
+      // Reset any lingering "exited"/"error" overlay from the previous
+      // workspace so switching to a healthy one doesn't keep showing it.
       setPhase(sid ? "connecting" : "spawning");
     }
     if (sid) {
       setActiveSession(sid);
-      if (phase() === "spawning") setPhase("connecting");
       void syncGrid();
       return;
     }
@@ -1321,6 +1395,12 @@ export default function Terminal(props: TerminalProps) {
       // inside the registration microtask. (Workspace flash-switch
       // could otherwise pile up live listeners across reloads.)
       void listenerPromise.then((u) => u()).catch(() => {});
+    }
+    // Same early-unmount safety for the pty_event listener.
+    if (ptyUnlisten) {
+      ptyUnlisten();
+    } else {
+      void ptyListenerPromise.then((u) => u()).catch(() => {});
     }
   });
 
@@ -1533,7 +1613,7 @@ export default function Terminal(props: TerminalProps) {
       >
         <div class="terminal-loading-stack">
           <span class="terminal-loading-brand">tessera</span>
-          <Show when={phase() !== "error"}>
+          <Show when={phase() === "spawning" || phase() === "connecting"}>
             <div class="terminal-loading-dots" aria-label="loading">
               <span />
               <span />
@@ -1581,6 +1661,25 @@ export default function Terminal(props: TerminalProps) {
               }}
             >
               Retry
+            </button>
+          </Show>
+          <Show when={phase() === "exited"}>
+            <span class="terminal-loading-caption">session ended</span>
+            <button
+              type="button"
+              onClick={retrySpawn}
+              style={{
+                "margin-top": "8px",
+                padding: "4px 14px",
+                "font-size": "12px",
+                color: "var(--accent, #C8825B)",
+                background: "transparent",
+                border: "1px solid var(--accent, #C8825B)",
+                "border-radius": "4px",
+                cursor: "pointer",
+              }}
+            >
+              Restart
             </button>
           </Show>
         </div>

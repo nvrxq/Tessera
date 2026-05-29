@@ -121,10 +121,14 @@ export function setSettings(cfg: UserConfig): void {
  *  the save and any other live components will re-render with the new
  *  size.  */
 export async function setTerminalFontSize(px: number): Promise<void> {
+  // Clamp to the same 8..32 range the Rust config enforces, so a stray caller
+  // can't push an out-of-range size into the live signal (and through the save
+  // round-trip) before the backend normalizes it back.
+  const clamped = Math.max(8, Math.min(32, Math.round(px)));
   const cur = config();
   const next: UserConfig = {
     ...cur,
-    terminal: { ...cur.terminal, font_size_px: px },
+    terminal: { ...cur.terminal, font_size_px: clamped },
   };
   setSettings(next);
   await saveSettings(next);

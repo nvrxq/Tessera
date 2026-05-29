@@ -1,0 +1,14 @@
+-- Heal session-mixing damage from the pre-0.1.12 pinning scheme.
+--
+-- Through v0.1.11, a workspace's claude_session_id was assigned by mtime
+-- detection (newest jsonl in the folder). When two workspaces shared one
+-- folder, that detection mis-attributed sessions — a workspace could be
+-- pinned to a SIBLING's conversation. Those bad pins persist in the DB and
+-- would keep resuming the wrong conversation even after the spawner is fixed.
+--
+-- Clear every pin once. On the next spawn each workspace mints a fresh,
+-- Tessera-owned session uuid and launches `claude --session-id <uuid>`, so
+-- identities become deterministic and unambiguous from here on. The on-disk
+-- conversation jsonl files are NOT touched — only the (unreliable) pins are
+-- dropped, so nothing is permanently lost.
+UPDATE workspaces SET claude_session_id = NULL;

@@ -281,7 +281,8 @@ fn row_to_pomodoro(row: &rusqlite::Row<'_>) -> rusqlite::Result<PomodoroState> {
         elapsed_seconds_before_pause: row.get(5)?,
         cycles_completed: row.get(6)?,
         updated_at: parse_dt(&updated_s, 7)?,
-        paused_from: paused_from_s.map(|s| PomodoroMode::from_str(&s).unwrap_or(PomodoroMode::Work)),
+        paused_from: paused_from_s
+            .map(|s| PomodoroMode::from_str(&s).unwrap_or(PomodoroMode::Work)),
     })
 }
 
@@ -361,7 +362,8 @@ fn row_to_app_pomodoro(row: &rusqlite::Row<'_>) -> rusqlite::Result<PomodoroStat
         elapsed_seconds_before_pause: row.get(4)?,
         cycles_completed: row.get(5)?,
         updated_at: parse_dt(&updated_s, 6)?,
-        paused_from: paused_from_s.map(|s| PomodoroMode::from_str(&s).unwrap_or(PomodoroMode::Work)),
+        paused_from: paused_from_s
+            .map(|s| PomodoroMode::from_str(&s).unwrap_or(PomodoroMode::Work)),
     })
 }
 

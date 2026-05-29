@@ -162,6 +162,22 @@ const LinksTab: Component<{ workspaceId: string }> = (props) => {
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
 
+  // This component instance is reused across workspace switches (it isn't
+  // keyed on the id), so half-typed input and stale errors would carry over —
+  // and submitting the leftover URL would add it to the WRONG workspace. Reset
+  // the form whenever the workspace changes.
+  createEffect(
+    on(
+      () => props.workspaceId,
+      () => {
+        setUrl("");
+        setLabel("");
+        setError(null);
+      },
+      { defer: true },
+    ),
+  );
+
   const onSubmit = async (e: SubmitEvent) => {
     e.preventDefault();
     const u = url().trim();
@@ -304,6 +320,16 @@ const TasksTab: Component<{ workspaceId: string }> = (props) => {
   const [title, setTitle] = createSignal("");
   const [busy, setBusy] = createSignal(false);
   const [showCompleted, setShowCompleted] = createSignal(false);
+
+  // Reused across workspace switches — clear the half-typed task title so it
+  // doesn't carry over (and get added to the wrong workspace on submit).
+  createEffect(
+    on(
+      () => props.workspaceId,
+      () => setTitle(""),
+      { defer: true },
+    ),
+  );
 
   const onSubmit = async (e: SubmitEvent) => {
     e.preventDefault();

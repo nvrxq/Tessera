@@ -198,18 +198,36 @@ impl WorkspaceService {
     /// no integration scripts — Tessera is a Claude Code TUI viewer, not a
     /// general terminal.
     ///
-    /// Conversation continuity rules (resolves the cross-workspace session
-    /// mixing bug — two workspaces sharing a folder used to both `--continue`
-    /// the same jsonl):
-    /// * **pinned + jsonl exists** → `claude --resume <id>` (sticky per
-    ///   workspace).
-    /// * **pinned but jsonl vanished** → drop the pin and fall back to
-    ///   `--continue`; log to tracing so we notice if Claude rotates files.
-    /// * **not pinned, never launched** → plain `claude`; after the spawn
-    ///   we detect the freshest jsonl for the cwd and pin it.
-    /// * **not pinned, prior session ran** → `--continue` (legacy path
-    ///   used by rows created before migration 0009).
+    /// **Deterministic conversation identity** (this is what finally fixes the
+    /// same-folder session-mixing bug). Tessera *generates* the session uuid
+    /// and hands it to claude:
+    /// * **first spawn** → generate a uuid, persist it on the row, launch
+    ///   `claude --session-id <uuid>` (a fresh conversation with OUR id).
+    /// * **subsequent spawns, jsonl present** → `claude --resume <uuid>`.
+    /// * **subsequent spawns, jsonl gone** → `claude --session-id <uuid>`
+    ///   again (re-create the same stable id; `--resume` hard-errors on a
+    ///   missing id, so we must not use it blindly).
+    ///
+    /// The old scheme pinned by *mtime detection* (`newest_session_id(cwd)`),
+    /// which grabbed whichever jsonl in the folder was touched last — i.e. a
+    /// sibling workspace's session — and otherwise fell back to `--continue`,
+    /// which resumes the folder's newest conversation regardless of which
+    /// workspace asked. Both are gone.
+    ///
+    /// Idempotent: if a live PTY already backs this workspace, reuse it rather
+    /// than spawning a second claude (which would orphan the first and litter
+    /// the folder with extra jsonls — aggravating the very mixing we fix).
     pub fn spawn_agent(&self, workspace_id: Uuid, cols: u16, rows: u16) -> Result<Uuid> {
+        // Reuse a still-live session for this workspace. Guards against the
+        // App pre-spawn racing the Terminal-mount spawn past the frontend
+        // dedupe, and against a stale frontend session_id triggering a
+        // duplicate launch.
+        if let Some(existing) = self.current_session(workspace_id) {
+            if self.supervisor.is_alive(existing) {
+                return Ok(existing);
+            }
+        }
+
         let workspace = {
             let conn = self.db.lock().unwrap();
             tessera_store::workspaces::get(&conn, workspace_id)?
@@ -220,123 +238,66 @@ impl WorkspaceService {
         if workspace.dangerous_skip_permissions {
             args.push("--dangerously-skip-permissions".to_string());
         }
-        let mut clear_pin_after_spawn = false;
-        match workspace.claude_session_id.as_deref() {
-            Some(sid)
-                if tessera_core::claude_session::session_file_exists(
-                    &workspace.worktree_path,
-                    sid,
-                ) =>
-            {
-                args.push("--resume".to_string());
-                args.push(sid.to_string());
-            }
-            Some(sid) => {
-                // The pinned jsonl is gone — Claude probably rotated or
-                // deleted it. Drop the pin so the freshly-detected one
-                // takes over after spawn, and fall back to `--continue`
-                // so we still surface whatever recent conversation Claude
-                // is willing to resume.
-                tracing::warn!(
-                    workspace_id = %workspace_id,
-                    pinned = sid,
-                    "pinned claude session jsonl missing — falling back to --continue",
-                );
-                clear_pin_after_spawn = true;
-                if workspace.has_prior_session {
-                    args.push("--continue".to_string());
+
+        // Resolve (and if necessary mint + persist) this workspace's stable
+        // session uuid before spawning, so a crash mid-spawn still remembers
+        // the identity.
+        let session_uuid = match workspace.claude_session_id.clone() {
+            Some(id) => id,
+            None => {
+                let id = Uuid::new_v4().to_string();
+                let conn = self.db.lock().unwrap();
+                // Re-read the pin under the same lock we write it with, so two
+                // racing first-spawns can't both mint and clobber each other —
+                // if another call already pinned, adopt its uuid.
+                match tessera_store::workspaces::get(&conn, workspace_id)? {
+                    Some(w) if w.claude_session_id.is_some() => w.claude_session_id.unwrap(),
+                    _ => {
+                        if let Err(e) = tessera_store::workspaces::update_claude_session_id(
+                            &conn,
+                            workspace_id,
+                            Some(&id),
+                        ) {
+                            tracing::warn!(error = %e, "persisting new claude_session_id failed");
+                        }
+                        id
+                    }
                 }
             }
-            None if workspace.has_prior_session => {
-                args.push("--continue".to_string());
-            }
-            None => {}
+        };
+        if tessera_core::claude_session::session_file_exists_anywhere(&session_uuid) {
+            args.push("--resume".to_string());
+            args.push(session_uuid);
+        } else {
+            args.push("--session-id".to_string());
+            args.push(session_uuid);
         }
-        let env: Vec<(String, String)> = Vec::new();
-        let session_id = self.spawn_session_inner(
+
+        self.spawn_session_inner(
             workspace_id,
             &workspace.worktree_path,
             &program,
             &args,
-            env,
+            Vec::new(),
             cols,
             rows,
-        )?;
-        // Keep the prior-session bookkeeping for any callers still relying on
-        // it; cheap and harmless even in the shell-default world.
-        if !workspace.has_prior_session {
-            let conn = self.db.lock().unwrap();
-            if let Err(e) = tessera_store::workspaces::mark_session_started(&conn, workspace_id) {
-                tracing::warn!(error = %e, "mark_session_started failed");
-            }
-        }
-        if clear_pin_after_spawn {
-            let conn = self.db.lock().unwrap();
-            if let Err(e) =
-                tessera_store::workspaces::update_claude_session_id(&conn, workspace_id, None)
-            {
-                tracing::warn!(error = %e, "clearing stale claude_session_id failed");
-            }
-        }
-        // Async pin: give Claude a moment to materialise its jsonl, then
-        // detect the freshest one for this cwd and persist it. This is
-        // best-effort — if it races (claude takes > the delay) the next
-        // spawn will still benefit, because every spawn re-runs detection
-        // when nothing is pinned.
-        if workspace.claude_session_id.is_none() || clear_pin_after_spawn {
-            self.schedule_session_id_detection(workspace_id, workspace.worktree_path.clone());
-        }
-        Ok(session_id)
+        )
     }
 
-    /// Spawn-then-detect. Spawned on a stdlib thread (not Tokio) so this
-    /// crate stays runtime-agnostic. 1.5 s is enough on a warm machine for
-    /// Claude to write the first chunk of its jsonl; we also re-scan up
-    /// to two more times in case the spawn was cold.
-    fn schedule_session_id_detection(&self, workspace_id: Uuid, cwd: std::path::PathBuf) {
-        let db = self.db.clone();
-        std::thread::spawn(move || {
-            for _ in 0..3 {
-                std::thread::sleep(std::time::Duration::from_millis(1500));
-                let Some(sid) = tessera_core::claude_session::newest_session_id(&cwd) else {
-                    continue;
-                };
-                let conn = match db.lock() {
-                    Ok(c) => c,
-                    Err(e) => {
-                        tracing::warn!(error = %e, "db lock poisoned during session detect");
-                        return;
-                    }
-                };
-                // Don't overwrite a pin the user (or a prior detection)
-                // already set — only fill the empty slot.
-                match tessera_store::workspaces::get(&conn, workspace_id) {
-                    Ok(Some(w)) if w.claude_session_id.is_none() => {
-                        if let Err(e) = tessera_store::workspaces::update_claude_session_id(
-                            &conn,
-                            workspace_id,
-                            Some(&sid),
-                        ) {
-                            tracing::warn!(error = %e, "pinning claude session failed");
-                        } else {
-                            tracing::info!(
-                                workspace_id = %workspace_id,
-                                claude_session_id = %sid,
-                                "pinned claude session for workspace",
-                            );
-                        }
-                    }
-                    _ => {}
-                }
-                return;
-            }
-        });
-    }
-
-    /// Drop the pinned Claude session uuid. Next spawn will either use
-    /// `--continue` (legacy) or start fresh, then re-detect and re-pin.
-    /// User-facing "Reset session" menu entry.
+    /// User-facing "Reset session" menu entry: discard the current
+    /// conversation and start fresh on the next launch.
+    ///
+    /// We must end the live PTY (and forget the mapping), not just clear the
+    /// pin. Spawning is now idempotent — it hands back a still-live session for
+    /// the workspace — so clearing the pin alone would have no visible effect:
+    /// the next spawn would return the same running claude on the same
+    /// conversation. Killing the PTY makes the frontend show its "session
+    /// ended → Restart" overlay; the restart mints a brand-new session uuid
+    /// (the pin is now None) and launches `claude --session-id <new>`.
     pub fn reset_claude_session(&self, workspace_id: Uuid) -> Result<()> {
+        if let Some(session_id) = self.sessions.lock().unwrap().remove(&workspace_id) {
+            let _ = self.supervisor.kill(session_id);
+        }
         let conn = self.db.lock().unwrap();
         tessera_store::workspaces::update_claude_session_id(&conn, workspace_id, None)
     }
@@ -392,10 +353,7 @@ impl WorkspaceService {
         // command's `${TESSERA_WORKSPACE_ID:-<id>}` expansion resolve to the
         // correct workspace per-process.
         let mut env = env;
-        env.push((
-            "TESSERA_WORKSPACE_ID".to_string(),
-            workspace_id.to_string(),
-        ));
+        env.push(("TESSERA_WORKSPACE_ID".to_string(), workspace_id.to_string()));
         let cfg = SessionConfig {
             program: program.to_string(),
             args: args.to_vec(),

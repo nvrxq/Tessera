@@ -48,6 +48,14 @@ const MIGRATIONS: &[Migration] = &[
         version: 10,
         sql: include_str!("../migrations/0010_pomodoro_paused_from.sql"),
     },
+    Migration {
+        version: 11,
+        sql: include_str!("../migrations/0011_reset_claude_session_pins.sql"),
+    },
+    Migration {
+        version: 12,
+        sql: include_str!("../migrations/0012_pomodoro_paused_from_backfill.sql"),
+    },
 ];
 
 pub fn apply(conn: &Connection) -> Result<()> {

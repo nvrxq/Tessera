@@ -439,7 +439,19 @@ impl From<RawTerminal> for TerminalConfig {
                         }
                     }
                 }
-                if bad {
+                // The palette must be exactly 16 entries (ANSI 0–15). A
+                // shorter array is silently padded with defaults downstream by
+                // `ColorPalette::from_user`, so indices 8–15 would render with
+                // the wrong colours; a longer one carries dead entries. Either
+                // way, fall back to the full default palette.
+                if bad || out.len() != 16 {
+                    if !bad && out.len() != 16 {
+                        tracing::warn!(
+                            field = "terminal.palette",
+                            count = out.len(),
+                            "settings: palette must have exactly 16 entries; using default palette"
+                        );
+                    }
                     default_ansi_palette()
                 } else {
                     out
@@ -750,9 +762,8 @@ mod tests {
     /// that flag — it must NOT fail the whole `terminal` section.
     #[test]
     fn wrong_typed_bool_preserves_other_fields() {
-        let cfg = load_from_str(
-            r##"{ "terminal": { "font_family": "Keep", "cursor_blink": "yes" } }"##,
-        );
+        let cfg =
+            load_from_str(r##"{ "terminal": { "font_family": "Keep", "cursor_blink": "yes" } }"##);
         assert_eq!(cfg.terminal.font_family, "Keep");
         assert!(!cfg.terminal.cursor_blink, "bad bool falls back to default");
     }
@@ -760,8 +771,7 @@ mod tests {
     /// A non-array palette (wrong shape entirely) resets only the palette.
     #[test]
     fn non_array_palette_resets_only_palette() {
-        let cfg =
-            load_from_str(r##"{ "terminal": { "font_size_px": 20, "palette": "nope" } }"##);
+        let cfg = load_from_str(r##"{ "terminal": { "font_size_px": 20, "palette": "nope" } }"##);
         assert_eq!(cfg.terminal.palette, default_ansi_palette());
         assert_eq!(cfg.terminal.font_size_px, 20);
     }
@@ -773,7 +783,10 @@ mod tests {
         let cfg = load_from_str(
             r##"{ "behavior": { "auto_spawn_on_workspace_open": 1, "save_scrollback_lines": 4321 } }"##,
         );
-        assert!(cfg.behavior.auto_spawn_on_workspace_open, "bad bool → default true");
+        assert!(
+            cfg.behavior.auto_spawn_on_workspace_open,
+            "bad bool → default true"
+        );
         assert_eq!(cfg.behavior.save_scrollback_lines, 4321);
     }
 }

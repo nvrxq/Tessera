@@ -278,13 +278,24 @@ pub fn workspace_list(
 #[tauri::command]
 pub fn workspace_spawn_agent(
     state: State<'_, WorkspaceServiceState>,
+    sizes: State<'_, GridSizesState>,
     workspace_id: Uuid,
     cols: u16,
     rows: u16,
 ) -> Result<Uuid, String> {
-    state
+    let session_id = state
         .spawn_agent(workspace_id, cols, rows)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // Pre-register the grid size so the PTY pump builds the wezterm-term
+    // parser at the correct dimensions on the FIRST byte chunk. Without this,
+    // any output arriving before the frontend's follow-up `terminal_resize`
+    // makes `feed()` create the parser at the default 80×24, so claude's first
+    // paint renders at the wrong size and then jumps — a visible artifact.
+    sizes
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(session_id, (cols, rows));
+    Ok(session_id)
 }
 
 #[tauri::command]
@@ -1343,7 +1354,7 @@ mod extras_tests {
             mode: PomodoroMode::Paused,
             started_at: Some(started),
             paused_at: Some(now),
-            target_seconds: 300, // 5-min break
+            target_seconds: 300,                  // 5-min break
             elapsed_seconds_before_pause: 4 * 60, // past the 150s half-target
             cycles_completed: 7,
             updated_at: now,
@@ -1384,7 +1395,9 @@ mod extras_tests {
         let resumed = PomodoroState {
             workspace_id: Uuid::nil(),
             mode: resume_mode,
-            started_at: Some(Utc::now() - chrono::Duration::seconds(prior.elapsed_seconds_before_pause)),
+            started_at: Some(
+                Utc::now() - chrono::Duration::seconds(prior.elapsed_seconds_before_pause),
+            ),
             paused_at: None,
             target_seconds: prior.target_seconds,
             elapsed_seconds_before_pause: 0,
@@ -1395,7 +1408,10 @@ mod extras_tests {
         tessera_store::extras::upsert_app_pomodoro(&conn, &resumed).unwrap();
 
         let after = tessera_store::extras::get_app_pomodoro(&conn).unwrap();
-        assert!(matches!(after.mode, PomodoroMode::Break), "break resumes as break, not work");
+        assert!(
+            matches!(after.mode, PomodoroMode::Break),
+            "break resumes as break, not work"
+        );
         assert_eq!(after.target_seconds, 300, "break keeps its 300s target");
         assert_eq!(after.paused_from, None, "paused_from cleared on resume");
     }

@@ -20,7 +20,14 @@ pub struct Supervisor {
 
 impl Supervisor {
     pub fn new() -> Self {
-        let (tx, _) = broadcast::channel::<PtyEvent>(1024);
+        // Capacity is shared across ALL sessions. When claude floods output
+        // (large file dumps, alt-screen redraws) faster than the single pump
+        // task drains, a too-small buffer overflows and `recv` returns
+        // `Lagged`, silently DROPPING parser bytes — which desyncs the grid
+        // and shows as on-screen artifacts. 8192 absorbs multi-MB bursts;
+        // the buffer sits near-empty in steady state so the memory cost is
+        // only paid under backpressure.
+        let (tx, _) = broadcast::channel::<PtyEvent>(8192);
         Self {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             tx,
@@ -49,6 +56,17 @@ impl Supervisor {
         });
 
         Ok(session_id)
+    }
+
+    /// Is this session still backed by a live PTY? The drain thread removes
+    /// the session from the map the instant the child exits (see `spawn`), so
+    /// a present key is a reliable liveness signal. Used by the workspace
+    /// service to make spawning idempotent.
+    pub fn is_alive(&self, session_id: Uuid) -> bool {
+        self.sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(&session_id)
     }
 
     pub fn write(&self, session_id: Uuid, bytes: &[u8]) -> Result<()> {
