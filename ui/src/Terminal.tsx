@@ -830,7 +830,8 @@ export default function Terminal(props: TerminalProps) {
       lastCursorVisible &&
       (!shouldShowCursor ||
         lastCursorCol !== snap.cursor_col ||
-        lastCursorRow !== snap.cursor_row)
+        lastCursorRow !== snap.cursor_row ||
+        lastCursorShape !== snap.cursor_shape)
     ) {
       const oldIdx = lastCursorRow * gridCols + lastCursorCol;
       if (oldIdx >= 0 && oldIdx < grid.length) {

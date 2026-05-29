@@ -73,7 +73,18 @@ struct SessionState {
     /// row instead of allocating a fresh `Vec<GridCell>` for every row of
     /// every tick.
     scratch_row: Vec<GridCell>,
+    /// Delta snapshots emitted since the last full. Rendering is incremental
+    /// (deltas forever in steady state), so any cell that ever ends up wrong
+    /// on the canvas would persist until a resize. Forcing a periodic full
+    /// (`KEYFRAME_INTERVAL`) bounds the lifetime of ANY drift to a few seconds
+    /// of activity — a cheap safety net on top of the targeted fixes.
+    snaps_since_full: u32,
 }
+
+/// Force a full snapshot every N deltas per session so on-screen drift can't
+/// outlive a few seconds of activity. Only counts ticks where the session was
+/// dirty, so an idle session costs nothing.
+const KEYFRAME_INTERVAL: u32 = 600;
 
 pub struct TerminalRegistry {
     inner: Mutex<HashMap<Uuid, SessionState>>,
@@ -121,6 +132,7 @@ impl TerminalRegistry {
             scroll_offset: 0,
             scratch_cells: Vec::new(),
             scratch_row: Vec::new(),
+            snaps_since_full: 0,
         });
         st.term.feed(bytes);
         // Snap back to live tail on every new chunk — see SessionState.
@@ -222,8 +234,10 @@ impl TerminalRegistry {
         }
         debug_assert_eq!(st.scratch_cells.len(), total);
 
-        let needs_full =
-            st.last_cells.len() != total || cols != st.last_cols || rows != st.last_rows;
+        let needs_full = st.last_cells.len() != total
+            || cols != st.last_cols
+            || rows != st.last_rows
+            || st.snaps_since_full >= KEYFRAME_INTERVAL;
 
         let snap = if needs_full {
             // First snapshot or post-resize — send full grid. We have to
@@ -239,6 +253,7 @@ impl TerminalRegistry {
             std::mem::swap(&mut st.last_cells, &mut st.scratch_cells);
             st.last_cols = cols;
             st.last_rows = rows;
+            st.snaps_since_full = 0;
             Snapshot {
                 session_id: sid,
                 cols,
@@ -257,17 +272,30 @@ impl TerminalRegistry {
             // Vecs are intentionally fresh each tick — they're typically
             // 1–3 entries on a keystroke and get moved into the outgoing
             // Snapshot anyway.
+            let cols_usize = cols as usize;
             let mut positions: Vec<u32> = Vec::new();
             let mut cells: Vec<WireCell> = Vec::new();
-            for (i, (new, old)) in st
-                .scratch_cells
-                .iter()
-                .zip(st.last_cells.iter())
-                .enumerate()
-            {
+            for i in 0..total {
+                let new = st.scratch_cells[i];
+                let old = st.last_cells[i];
                 if new != old {
                     positions.push(i as u32);
-                    cells.push(*new);
+                    cells.push(new);
+                    // Wide → narrow: a width-2 glyph's right half occupied the
+                    // spacer column i+1, which is blank both before and after,
+                    // so the diff above skips it — yet its PIXELS still show the
+                    // old glyph's right half (and its background). Force-emit the
+                    // spacer so the frontend repaints (clears) that column.
+                    // Without this, every CJK/emoji that shrinks leaves stale
+                    // pixels that accumulate until a resize — the "artifacts
+                    // after a while of use" the user reported.
+                    if old.w > 1 && new.w <= 1 {
+                        let j = i + 1;
+                        if j < total && j % cols_usize != 0 {
+                            positions.push(j as u32);
+                            cells.push(st.scratch_cells[j]);
+                        }
+                    }
                 }
             }
             // Swap roles: scratch_cells holds the just-built grid → it
@@ -276,6 +304,7 @@ impl TerminalRegistry {
             std::mem::swap(&mut st.last_cells, &mut st.scratch_cells);
             st.last_cols = cols;
             st.last_rows = rows;
+            st.snaps_since_full = st.snaps_since_full.saturating_add(1);
             Snapshot {
                 session_id: sid,
                 cols,
@@ -357,5 +386,68 @@ impl std::io::Write for DevNull {
     }
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression for the accumulating-artifact bug: when a wide (width-2)
+    /// glyph is overwritten by a narrow char, the spacer column it used to
+    /// occupy is blank both before and after, so the plain diff skips it —
+    /// leaving the old glyph's right-half pixels on the canvas forever. The
+    /// diff must FORCE-emit that spacer column so the frontend clears it.
+    #[test]
+    fn wide_to_narrow_force_emits_spacer_column() {
+        let reg = TerminalRegistry::new();
+        let sid = Uuid::new_v4();
+        // A CJK ideograph is width 2 and occupies physical columns 0 and 1.
+        reg.feed(sid, 20, 3, "世".as_bytes());
+        let full = reg.snapshot(sid).expect("first snapshot");
+        assert!(full.full, "first snapshot is full");
+        assert_eq!(full.cells[0].w, 2, "wide glyph reports column span 2");
+
+        // Carriage-return to column 0 and overwrite with a narrow 'A'.
+        reg.feed(sid, 20, 3, b"\rA");
+        let delta = reg.snapshot(sid).expect("second snapshot");
+        assert!(!delta.full, "second snapshot is a delta");
+        assert!(
+            delta.positions.contains(&0),
+            "the changed glyph cell (col 0) is emitted"
+        );
+        assert!(
+            delta.positions.contains(&1),
+            "the freed spacer column (col 1) is force-emitted so its stale \
+             right-half pixels get repainted"
+        );
+    }
+
+    /// A periodic full keyframe must be emitted so any drift self-heals within
+    /// a bounded number of deltas, regardless of cause.
+    #[test]
+    fn keyframe_forces_periodic_full() {
+        let reg = TerminalRegistry::new();
+        let sid = Uuid::new_v4();
+        reg.feed(sid, 20, 3, b"hi");
+        assert!(reg.snapshot(sid).expect("full").full, "first is full");
+        // Drive deltas without changing geometry; one of the next
+        // KEYFRAME_INTERVAL snapshots must come back full.
+        let mut saw_full = false;
+        for i in 0..=KEYFRAME_INTERVAL {
+            // Alternate a character so each tick is dirty and produces a delta.
+            let byte: &[u8] = if i % 2 == 0 { b"\rx" } else { b"\ry" };
+            reg.feed(sid, 20, 3, byte);
+            if let Some(s) = reg.snapshot(sid) {
+                if s.full {
+                    saw_full = true;
+                    break;
+                }
+            }
+        }
+        assert!(
+            saw_full,
+            "a keyframe full snapshot must be emitted within the interval"
+        );
     }
 }
