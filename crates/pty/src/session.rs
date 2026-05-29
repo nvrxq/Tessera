@@ -54,17 +54,35 @@ impl PtySession {
         drop(pair.slave);
 
         let child_killer = child.clone_killer();
-        let writer = pair.master.take_writer()?;
+        let writer: Arc<Mutex<Box<dyn std::io::Write + Send>>> =
+            Arc::new(Mutex::new(pair.master.take_writer()?));
         let mut reader = pair.master.try_clone_reader()?;
+
+        // The reader thread answers Device-Attributes queries on the child's
+        // behalf and strips them from the stream so a not-yet-attached (or
+        // double-answering) frontend can't desync the program into artifacts.
+        let writer_for_da = Arc::clone(&writer);
 
         let (tx, rx) = mpsc::channel::<Vec<u8>>();
         let handle = thread::spawn(move || {
             let mut buf = [0u8; 4096];
+            let mut filtered: Vec<u8> = Vec::with_capacity(4096);
+            let mut da_filter = crate::da_filter::DaFilter::new();
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
-                        if tx.send(buf[..n].to_vec()).is_err() {
+                        filtered.clear();
+                        da_filter.process(&buf[..n], &mut filtered, |reply| {
+                            if let Ok(mut w) = writer_for_da.lock() {
+                                let _ = w.write_all(reply);
+                                let _ = w.flush();
+                            }
+                        });
+                        if filtered.is_empty() {
+                            continue;
+                        }
+                        if tx.send(filtered.clone()).is_err() {
                             break;
                         }
                     }
@@ -82,7 +100,7 @@ impl PtySession {
             PtySession {
                 master: pair.master,
                 child_killer,
-                writer: Arc::new(Mutex::new(writer)),
+                writer,
                 reader_thread: Some(handle),
             },
             rx,

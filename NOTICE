@@ -1,13 +1,20 @@
 Tessera
 Copyright (c) nvrxq
 
-This product includes terminal-rendering code adapted/copied from Terax
+This product includes terminal code adapted/copied from Terax
 (https://github.com/crynta/terax-ai), licensed under the Apache License,
 Version 2.0. Portions reused:
 
-  - The xterm.js + WebGL renderer wiring, IME-composition guard, copy/paste
-    and keymap handling   (Terax src/modules/terminal/lib/rendererPool.ts,
-    keymap.ts)  ->  ui/src/Terminal.tsx, ui/src/lib/xtermKeymap.ts
+  - The renderer pool: a bounded pool of reused xterm.js + WebGL slots with
+    context-loss recovery and canvas-context release, IME-composition guard,
+    copy/paste and keymap handling
+    (Terax src/modules/terminal/lib/rendererPool.ts, keymap.ts,
+    useTerminalSession.ts)  ->  ui/src/lib/rendererPool.ts,
+    ui/src/lib/termSession.ts, ui/src/lib/xtermKeymap.ts, ui/src/Terminal.tsx
+  - The Device-Attributes (DA) query filter that answers CSI-c queries on the
+    child's behalf and strips them from the stream
+    (Terax src-tauri/src/modules/pty/da_filter.rs)
+    ->  crates/pty/src/da_filter.rs
   - The xterm ITheme mapping shape  (Terax src/styles/terminalTheme.ts)
     ->  ui/src/lib/terminalTheme.ts
   - The raw-PTY-byte IPC Channel streaming approach
