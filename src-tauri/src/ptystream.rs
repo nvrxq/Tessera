@@ -98,6 +98,17 @@ impl PtyStreamRegistry {
         st.channel = Some(channel);
     }
 
+    /// Stop streaming a session to the frontend without forgetting it. Called
+    /// when the user switches away: the PTY keeps running and the ring keeps
+    /// buffering (so a switch-back replays everything), but we no longer push
+    /// live bytes to a channel the frontend has stopped reading.
+    pub fn detach(&self, sid: Uuid) {
+        let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(st) = map.get_mut(&sid) {
+            st.channel = None;
+        }
+    }
+
     /// Forget a session (PTY exited or workspace deleted).
     pub fn remove(&self, sid: Uuid) {
         self.inner

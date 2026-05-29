@@ -246,6 +246,12 @@ export default function Terminal(props: TerminalProps) {
    *  ring buffer then streams live — and sizes the PTY to the current fit. */
   function bindSession(sid: string) {
     if (!term) return;
+    // Stop streaming the session we're leaving — its PTY keeps running and its
+    // ring keeps buffering, so a switch-back replays everything, but we don't
+    // want the backend pushing its live bytes to a channel we've abandoned.
+    if (activeSid && activeSid !== sid) {
+      void invoke("terminal_detach", { sessionId: activeSid }).catch(() => {});
+    }
     activeSid = sid;
     sawFirstByte = false;
     lastCols = 0;
@@ -261,6 +267,9 @@ export default function Terminal(props: TerminalProps) {
       if (!sawFirstByte) {
         sawFirstByte = true;
         setPhase("ready");
+        // Re-fit now that the overlay is gone and content is flowing — the
+        // first fit during bind may have run before the container settled.
+        queueMicrotask(() => doFit());
       }
     };
     void invoke("terminal_attach", { sessionId: sid, onData: ch }).catch((e) => {
@@ -337,6 +346,23 @@ export default function Terminal(props: TerminalProps) {
         ptyWrite(sid, `\x1b[200~${paths.join(" ")}\x1b[201~`);
       });
     })();
+
+    // Initial bind — done explicitly here (term now exists) rather than
+    // relying on the binding createEffect firing after onMount. The effect
+    // below still handles every subsequent workspace/session switch; its
+    // guards (`sid === activeSid`, `spawning.has(ws)`) make this first bind
+    // a no-op on the effect's first run, so there's no double-bind.
+    const initSid = props.sessionId;
+    if (initSid) {
+      if (exitedSessions.has(initSid)) {
+        setPhase("exited");
+      } else {
+        setPhase("connecting");
+        bindSession(initSid);
+      }
+    } else {
+      attemptSpawn(props.workspaceId);
+    }
   });
 
   // (Re)bind whenever the selected workspace or its session changes. Runs

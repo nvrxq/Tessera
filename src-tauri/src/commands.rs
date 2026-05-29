@@ -429,6 +429,19 @@ pub fn terminal_attach(
     Ok(())
 }
 
+/// Stop streaming a session to the frontend (the user switched to another
+/// workspace). The PTY keeps running and its output keeps buffering, so
+/// switching back replays the full history; this just stops pushing live
+/// bytes to a channel nobody is reading.
+#[tauri::command]
+pub fn terminal_detach(
+    stream: tauri::State<'_, PtyStreamRegistryState>,
+    session_id: Uuid,
+) -> Result<(), String> {
+    stream.detach(session_id);
+    Ok(())
+}
+
 // ---- Settings ----
 
 /// Read the user's settings file (or defaults if it doesn't exist / is

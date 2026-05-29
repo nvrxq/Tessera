@@ -191,6 +191,7 @@ pub fn run() {
             commands::workspace_reorder,
             commands::workspace_assign_project,
             commands::terminal_attach,
+            commands::terminal_detach,
             commands::list_directories,
             commands::save_paste_image,
             commands::workspace_links_list,
