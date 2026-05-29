@@ -36,6 +36,10 @@ const FIT_DEBOUNCE_MS = 8;
 const PTY_RESIZE_DEBOUNCE_MS = 256;
 const MIN_FONT_PX = 8;
 const MAX_FONT_PX = 32;
+const WEBGL_RECOVERY_DELAY_MS = 250;
+// Below this a re-shown slot is fresh enough to trust; above it, repaint on
+// unhide to defeat silent GPU/context staleness.
+const SLOT_STALE_MS = 10_000;
 
 const TEXT_ENCODER = new TextEncoder();
 
@@ -554,11 +558,6 @@ function detachSlotFromLeaf(slot: Slot): void {
   slot.lastUsedAt = performance.now();
 }
 
-const WEBGL_RECOVERY_DELAY_MS = 250;
-// Below this a re-shown slot is fresh enough to trust; above it, repaint on
-// unhide to defeat silent GPU/context staleness.
-const SLOT_STALE_MS = 10_000;
-
 function attachWebgl(slot: Slot): void {
   if (slot.webglAddon || !slot.term.element) return;
   const elem = slot.term.element;
@@ -567,6 +566,11 @@ function attachWebgl(slot: Slot): void {
   );
   try {
     const webgl = new WebglAddon();
+    // Publish to the slot BEFORE loadAddon: if the context is already lost,
+    // some engines fire onContextLoss synchronously during loadAddon, and the
+    // handler's `cur === webgl` guard must see this addon to null it out (else
+    // a disposed addon stays installed as the live renderer).
+    slot.webglAddon = webgl;
     webgl.onContextLoss(() => {
       const cur = slot.webglAddon;
       if (cur === webgl) {
@@ -590,13 +594,23 @@ function attachWebgl(slot: Slot): void {
       }, WEBGL_RECOVERY_DELAY_MS);
     });
     slot.term.loadAddon(webgl);
-    const after = elem.querySelectorAll<HTMLCanvasElement>("canvas");
-    const added: HTMLCanvasElement[] = [];
-    for (const c of after) if (!before.has(c)) added.push(c);
-    slot.webglAddon = webgl;
-    slot.webglCanvases = added;
+    // A synchronous onContextLoss during loadAddon may have already nulled the
+    // addon; only record canvases if this addon is still the live one.
+    if (slot.webglAddon === webgl) {
+      const after = elem.querySelectorAll<HTMLCanvasElement>("canvas");
+      const added: HTMLCanvasElement[] = [];
+      for (const c of after) if (!before.has(c)) added.push(c);
+      slot.webglCanvases = added;
+    }
   } catch (e) {
     // WebGL unavailable — xterm falls back to its DOM renderer automatically.
+    if (slot.webglAddon) {
+      try {
+        slot.webglAddon.dispose();
+      } catch {}
+      slot.webglAddon = null;
+    }
+    slot.webglCanvases = [];
     console.warn("[tessera] webgl renderer unavailable:", e);
   }
 }
@@ -707,6 +721,7 @@ export function searchAddonFor(leafId: number): SearchAddon | null {
 /** Tear everything down (app teardown / HMR). */
 export function disposeAllSlots(): void {
   for (const slot of slots) {
+    detachChannel(slot);
     disposeSlotWebgl(slot);
     try {
       slot.term.dispose();

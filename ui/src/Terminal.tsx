@@ -48,6 +48,8 @@ export default function Terminal(props: TerminalProps) {
   // Sessions whose claude has exited — never (re)bind to them.
   const exitedSessions = new Set<string>();
 
+  let readyTimer: ReturnType<typeof setTimeout> | undefined;
+
   const [phase, setPhase] = createSignal<
     "spawning" | "connecting" | "ready" | "exited" | "error"
   >(props.sessionId ? "connecting" : "spawning");
@@ -66,6 +68,13 @@ export default function Terminal(props: TerminalProps) {
       onFirstBytes: () => setPhase("ready"),
     });
     if (warm) setPhase("ready");
+    // Safety net: a session that produces no immediate output (or a rare
+    // attach failure) must not leave the overlay stuck on "connecting" — the
+    // terminal is bound and usable, so reveal it.
+    clearTimeout(readyTimer);
+    readyTimer = setTimeout(() => {
+      if (phase() === "connecting") setPhase("ready");
+    }, 2500);
   }
 
   function attemptSpawn(ws: string) {
@@ -177,6 +186,7 @@ export default function Terminal(props: TerminalProps) {
   });
 
   onCleanup(() => {
+    clearTimeout(readyTimer);
     ptyUnlisten?.();
     dropUnlisten?.();
     disposeLeaf(leafId);

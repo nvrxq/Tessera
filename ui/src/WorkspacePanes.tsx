@@ -42,17 +42,22 @@ export default function WorkspacePanes(props: WorkspacePanesProps) {
     setStore(ws(), "shells", (s) => [...s, { key, sessionId: null }]);
   }
 
-  function setShellSession(key: number, sid: string) {
-    setStore(ws(), "shells", (s) => s.key === key, "sessionId", sid);
+  // Take the owning workspace id explicitly: a shell's spawn can resolve AFTER
+  // the user switched away (the pane unmounted), and the session id must still
+  // be recorded against the workspace that owns it — otherwise the PTY leaks.
+  function setShellSession(wsId: string, key: number, sid: string) {
+    if (!store[wsId]) return;
+    setStore(wsId, "shells", (s) => s.key === key, "sessionId", sid);
   }
 
-  function closeShell(key: number) {
-    const cur = store[ws()];
-    const sp = cur?.shells.find((s) => s.key === key);
+  function closeShell(wsId: string, key: number) {
+    const sp = store[wsId]?.shells.find((s) => s.key === key);
     if (sp?.sessionId) {
       void invoke("pty_kill", { sessionId: sp.sessionId }).catch(() => {});
     }
-    setStore(ws(), "shells", (s) => s.filter((x) => x.key !== key));
+    if (store[wsId]) {
+      setStore(wsId, "shells", (s) => s.filter((x) => x.key !== key));
+    }
   }
 
   function toggleDir() {
@@ -74,16 +79,22 @@ export default function WorkspacePanes(props: WorkspacePanesProps) {
         />
       </div>
       <For each={panes().shells}>
-        {(sp) => (
-          <div class="pane">
-            <ShellPane
-              cwd={props.cwd}
-              sessionId={sp.sessionId}
-              onSpawned={(sid) => setShellSession(sp.key, sid)}
-              onClose={() => closeShell(sp.key)}
-            />
-          </div>
-        )}
+        {(sp) => {
+          // Capture the workspace this pane belongs to at render time (the For
+          // only renders the active workspace's shells), so async callbacks
+          // target the right workspace even after a switch.
+          const owner = props.workspaceId;
+          return (
+            <div class="pane">
+              <ShellPane
+                cwd={props.cwd}
+                sessionId={sp.sessionId}
+                onSpawned={(sid) => setShellSession(owner, sp.key, sid)}
+                onClose={() => closeShell(owner, sp.key)}
+              />
+            </div>
+          );
+        }}
       </For>
       <div class="panes-toolbar">
         <Show when={panes().shells.length > 0}>

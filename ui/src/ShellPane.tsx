@@ -38,6 +38,8 @@ export default function ShellPane(props: ShellPaneProps) {
   const leafId = newLeafId();
   let ptyUnlisten: UnlistenFn | null = null;
   let spawning = false;
+  let disposed = false;
+  let readyTimer: ReturnType<typeof setTimeout> | undefined;
   const [phase, setPhase] = createSignal<
     "spawning" | "connecting" | "ready" | "exited" | "error"
   >(props.sessionId ? "connecting" : "spawning");
@@ -56,6 +58,10 @@ export default function ShellPane(props: ShellPaneProps) {
       onFirstBytes: () => setPhase("ready"),
     });
     if (warm) setPhase("ready");
+    clearTimeout(readyTimer);
+    readyTimer = setTimeout(() => {
+      if (phase() === "connecting") setPhase("ready");
+    }, 2500);
   }
 
   function spawnShell() {
@@ -70,8 +76,11 @@ export default function ShellPane(props: ShellPaneProps) {
       rows,
     })
       .then((res) => {
+        // Always report the new session so it's saved to the owning workspace
+        // (and can be killed / reattached) even if this pane unmounted mid-spawn
+        // due to a workspace switch — otherwise the PTY would leak.
         props.onSpawned(res.session_id);
-        showSession(res.session_id);
+        if (!disposed) showSession(res.session_id);
       })
       .catch((e) => {
         setErr(String(e));
@@ -113,6 +122,8 @@ export default function ShellPane(props: ShellPaneProps) {
   });
 
   onCleanup(() => {
+    disposed = true;
+    clearTimeout(readyTimer);
     ptyUnlisten?.();
     // Detach only — the backend keeps the shell alive so switching workspaces
     // and back restores it. The pane's close button is what kills it.
