@@ -1,5 +1,7 @@
 import { render } from "solid-js/web";
 import App from "./App";
+// Apply the persisted theme to <html data-theme> before first paint (no flash).
+import "./lib/themes";
 
 // Self-hosted fonts — no network round-trip on startup. Each import pulls
 // the WOFF2 files + @font-face declarations bundled by Vite.

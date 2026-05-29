@@ -28,6 +28,7 @@ import {
   showLeaf,
   writeLeaf,
 } from "./lib/termSession";
+import { activeThemeId } from "./lib/themes";
 import { spawnAgent } from "./lib/workspaces";
 
 export interface TerminalProps {
@@ -164,8 +165,9 @@ export default function Terminal(props: TerminalProps) {
     if (phase() === "ready") focusLeaf(leafId);
   });
 
-  // Live settings → pooled terminals (theme / font / cursor / scrollback).
+  // Live settings + theme switches → pooled terminals.
   createEffect(() => {
+    activeThemeId(); // track theme changes so the xterm palette refreshes
     const cfg = settings();
     applyTheme();
     applyFontFamily(cfg.terminal.font_family);

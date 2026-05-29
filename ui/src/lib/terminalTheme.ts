@@ -1,22 +1,26 @@
-// Map Tessera's user settings palette to an xterm.js ITheme.
-// Shape adapted from Terax (github.com/crynta/terax-ai,
-// src/styles/terminalTheme.ts, Apache-2.0) — see NOTICE — but sourced from
-// Tessera's own settings store instead of Terax's token system.
+// Map the active theme (or, for the default, the user's settings palette) to an
+// xterm.js ITheme. Shape adapted from Terax (github.com/crynta/terax-ai,
+// src/styles/terminalTheme.ts, Apache-2.0) — see NOTICE.
 
 import type { ITheme } from "@xterm/xterm";
 import { settings } from "./settings";
+import { activeTheme } from "./themes";
 
-/** Build an xterm ITheme from the current terminal settings. The 16-entry
- *  ANSI palette is guaranteed to be exactly 16 by the Rust config loader
- *  (it rejects a wrong-length palette and falls back to defaults). */
+/** Build an xterm ITheme. A curated theme supplies its own fixed palette; the
+ *  default ("tessera"/"light") theme uses the user-editable settings().terminal
+ *  palette (guaranteed 16 entries by the Rust config loader). */
 export function buildTerminalTheme(): ITheme {
+  const preset = activeTheme().terminal;
   const t = settings().terminal;
-  const p = t.palette ?? [];
+  const background = preset?.background ?? t.background;
+  const foreground = preset?.foreground ?? t.foreground;
+  const cursor = preset?.cursor ?? t.cursor_color;
+  const p = preset?.palette ?? t.palette ?? [];
   return {
-    background: t.background,
-    foreground: t.foreground,
-    cursor: t.cursor_color,
-    cursorAccent: t.background,
+    background,
+    foreground,
+    cursor,
+    cursorAccent: background,
     selectionBackground: "rgba(110, 160, 220, 0.32)",
     black: p[0],
     red: p[1],

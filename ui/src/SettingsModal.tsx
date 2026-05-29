@@ -21,6 +21,7 @@ import {
   type UserConfig,
 } from "./lib/settings";
 import SettingsPreview from "./SettingsPreview";
+import { activeThemeId, setTheme, THEMES, type ThemeId } from "./lib/themes";
 
 /** Debounce window (ms) for committing draft edits to the global
  *  `settings` signal. The main Terminal subscribes to that signal and a
@@ -38,7 +39,7 @@ export interface SettingsModalProps {
   onClose: () => void;
 }
 
-type SectionId = "appearance" | "terminal" | "cursor" | "behavior";
+type SectionId = "theme" | "appearance" | "terminal" | "cursor" | "behavior";
 
 const FONT_OPTIONS = [
   '"Geist Mono", ui-monospace, Menlo, monospace',
@@ -246,6 +247,12 @@ const SettingsModal: Component<SettingsModalProps> = (props) => {
         <div class="settings-body">
           <nav class="settings-nav" aria-label="Settings sections">
             <SectionLink
+              id="theme"
+              label="Theme"
+              current={section()}
+              onSelect={setSection}
+            />
+            <SectionLink
               id="appearance"
               label="Appearance"
               current={section()}
@@ -272,6 +279,9 @@ const SettingsModal: Component<SettingsModalProps> = (props) => {
           </nav>
 
           <div class="settings-pane">
+            <Show when={section() === "theme"}>
+              <ThemeSection />
+            </Show>
             <Show when={section() === "appearance"}>
               <AppearanceSection draft={draft()} patch={patch} />
             </Show>
@@ -351,6 +361,57 @@ type Patch = <K extends keyof UserConfig>(
   group: K,
   update: (g: UserConfig[K]) => UserConfig[K],
 ) => void;
+
+// Theme picker. Applies live (sets <html data-theme> + persists to
+// localStorage + drives the xterm palette) — independent of the draft/save
+// flow the other sections use, since the theme isn't part of UserConfig.
+function themeSwatch(id: ThemeId): string[] {
+  const def = THEMES.find((t) => t.id === id);
+  if (def?.terminal) {
+    const t = def.terminal;
+    return [t.background, t.palette[1], t.palette[2], t.palette[4], t.foreground];
+  }
+  if (id === "light") return ["#F7F2E7", "#B36F49", "#4F965F", "#3F6CCC", "#2A2622"];
+  return ["#0F0F10", "#C8825B", "#7FBD7F", "#5B8DEF", "#ECECE8"]; // tessera
+}
+
+const ThemeSection: Component = () => (
+  <div class="settings-section">
+    <h3 class="settings-section-title">Theme</h3>
+    <p class="theme-hint">
+      Recolours the whole app and the terminal palette. Applies instantly.
+    </p>
+    <div class="theme-list">
+      <For each={THEMES}>
+        {(t) => (
+          <button
+            type="button"
+            class="theme-card"
+            classList={{ "theme-card--active": activeThemeId() === t.id }}
+            onClick={() => setTheme(t.id)}
+          >
+            <span class="theme-swatches">
+              <For each={themeSwatch(t.id)}>
+                {(c) => (
+                  <span
+                    class="theme-swatch"
+                    ref={(el) => {
+                      el.style.backgroundColor = c;
+                    }}
+                  />
+                )}
+              </For>
+            </span>
+            <span class="theme-card-name">{t.label}</span>
+            <Show when={activeThemeId() === t.id}>
+              <span class="theme-card-active">active</span>
+            </Show>
+          </button>
+        )}
+      </For>
+    </div>
+  </div>
+);
 
 const AppearanceSection: Component<{ draft: UserConfig; patch: Patch }> = (p) => (
   <div class="settings-section">

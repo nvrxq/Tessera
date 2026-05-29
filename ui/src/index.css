@@ -73,6 +73,184 @@
   color-scheme: light;
 }
 
+/* —— Curated presets (opt-in). The warm-dark "dark" theme above stays the
+      default per DESIGN.md; these recolour the app chrome when selected.
+      Terminal palettes for these live in ui/src/lib/themes.ts. —— */
+
+[data-theme="catppuccin"] {
+  --bg-deep: #11111B;
+  --bg: #181825;
+  --surface: #1E1E2E;
+  --surface-elevated: #313244;
+  --surface-hover: #45475A;
+  --surface-selected: #585B70;
+  --border-subtle: #313244;
+  --border-strong: #45475A;
+  --text-primary: #CDD6F4;
+  --text-secondary: #BAC2DE;
+  --text-muted: #A6ADC8;
+  --text-disabled: #6C7086;
+  --accent: #CBA6F7;
+  --accent-hover: #DDB6FF;
+  --accent-quiet: #5B4B7A;
+  --accent-soft: rgba(203, 166, 247, 0.18);
+  --leak-pink: #F5C2E7;
+  --leak-amber: #FAB387;
+  --success: #A6E3A1;
+  --working: #89B4FA;
+  --needs-input: #F9E2AF;
+  --crashed: #F38BA8;
+  --idle: #6C7086;
+  --card-shadow: 0 12px 24px rgba(0, 0, 0, 0.45);
+  --card-border: rgba(255, 255, 255, 0.05);
+  --card-inset: rgba(255, 255, 255, 0.05);
+  color-scheme: dark;
+}
+
+[data-theme="nord"] {
+  --bg-deep: #272C36;
+  --bg: #2E3440;
+  --surface: #2E3440;
+  --surface-elevated: #3B4252;
+  --surface-hover: #434C5E;
+  --surface-selected: #4C566A;
+  --border-subtle: #3B4252;
+  --border-strong: #4C566A;
+  --text-primary: #ECEFF4;
+  --text-secondary: #D8DEE9;
+  --text-muted: #7B88A1;
+  --text-disabled: #4C566A;
+  --accent: #88C0D0;
+  --accent-hover: #8FBCBB;
+  --accent-quiet: #3B5360;
+  --accent-soft: rgba(136, 192, 208, 0.16);
+  --leak-pink: #B48EAD;
+  --leak-amber: #D08770;
+  --success: #A3BE8C;
+  --working: #81A1C1;
+  --needs-input: #EBCB8B;
+  --crashed: #BF616A;
+  --idle: #4C566A;
+  --card-shadow: 0 12px 24px rgba(0, 0, 0, 0.4);
+  --card-border: rgba(255, 255, 255, 0.05);
+  --card-inset: rgba(255, 255, 255, 0.05);
+  color-scheme: dark;
+}
+
+[data-theme="gruvbox"] {
+  --bg-deep: #1D2021;
+  --bg: #282828;
+  --surface: #282828;
+  --surface-elevated: #3C3836;
+  --surface-hover: #504945;
+  --surface-selected: #665C54;
+  --border-subtle: #3C3836;
+  --border-strong: #504945;
+  --text-primary: #EBDBB2;
+  --text-secondary: #D5C4A1;
+  --text-muted: #A89984;
+  --text-disabled: #665C54;
+  --accent: #FE8019;
+  --accent-hover: #FF9D4D;
+  --accent-quiet: #7C3D10;
+  --accent-soft: rgba(254, 128, 25, 0.16);
+  --leak-pink: #D3869B;
+  --leak-amber: #FABD2F;
+  --success: #B8BB26;
+  --working: #83A598;
+  --needs-input: #FABD2F;
+  --crashed: #FB4934;
+  --idle: #665C54;
+  --card-shadow: 0 12px 24px rgba(0, 0, 0, 0.45);
+  --card-border: rgba(255, 255, 255, 0.04);
+  --card-inset: rgba(255, 255, 255, 0.04);
+  color-scheme: dark;
+}
+
+[data-theme="tokyo-night"] {
+  --bg-deep: #16161E;
+  --bg: #1A1B26;
+  --surface: #1A1B26;
+  --surface-elevated: #24283B;
+  --surface-hover: #292E42;
+  --surface-selected: #343A52;
+  --border-subtle: #24283B;
+  --border-strong: #343A52;
+  --text-primary: #C0CAF5;
+  --text-secondary: #A9B1D6;
+  --text-muted: #565F89;
+  --text-disabled: #414868;
+  --accent: #7AA2F7;
+  --accent-hover: #8FB3FF;
+  --accent-quiet: #3A4470;
+  --accent-soft: rgba(122, 162, 247, 0.16);
+  --leak-pink: #BB9AF7;
+  --leak-amber: #E0AF68;
+  --success: #9ECE6A;
+  --working: #7AA2F7;
+  --needs-input: #E0AF68;
+  --crashed: #F7768E;
+  --idle: #414868;
+  --card-shadow: 0 12px 24px rgba(0, 0, 0, 0.5);
+  --card-border: rgba(255, 255, 255, 0.05);
+  --card-inset: rgba(255, 255, 255, 0.05);
+  color-scheme: dark;
+}
+
+/* —— Theme picker (Settings → Theme) —— */
+.theme-hint {
+  color: var(--text-muted);
+  font-size: 12px;
+  margin: 0 0 12px;
+  max-width: 44ch;
+}
+.theme-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.theme-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--t-micro) var(--ease-out),
+    border-color var(--t-micro) var(--ease-out);
+}
+.theme-card:hover {
+  background: var(--surface-hover);
+}
+.theme-card--active {
+  border-color: var(--accent);
+  background: var(--surface-selected);
+}
+.theme-swatches {
+  display: inline-flex;
+  flex: none;
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: 0 0 0 1px var(--border-subtle);
+}
+.theme-swatch {
+  width: 16px;
+  height: 20px;
+}
+.theme-card-name {
+  flex: 1;
+}
+.theme-card-active {
+  color: var(--accent);
+  font-size: 12px;
+}
+
 :root {
   /* —— typography (theme-independent) —— */
   --font-ui: "Geist", system-ui, -apple-system, sans-serif;
