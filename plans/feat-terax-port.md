@@ -97,4 +97,20 @@ Extend `NOTICE` to credit crynta/terax-ai for: renderer pool, dormantRing,
 osc-handlers, da_filter, agent_detect, panes, theme system. Apache-2.0.
 
 ## Status log
-- [in progress] Phase A.
+- [done] Phase A — DA filter (crates/pty) + renderer pool w/ WebGL recovery
+  (rendererPool.ts) + session registry (termSession.ts) + Terminal.tsx rewrite.
+  Commit a6c18ec.
+- [done] Phase C — theme presets (themes.ts, index.css blocks) + live picker in
+  SettingsModal. Commit fd33416. (Background images deferred.)
+- [done] Phase B + D — companion shell split panes (WorkspacePanes.tsx,
+  ShellPane.tsx, pty_spawn_shell) + Shortcuts reference section. Commit 93393e2.
+- [done] Adversarial-review fixes (WebGL re-entrancy, shell-spawn-race PTY leak,
+  stuck-overlay fallback, TDZ hygiene). Commit fa97061.
+- VERIFIED-AS-BUILDS only: cargo test --workspace (all green) + fmt + clippy +
+  tsc + vite build + bun 1.3.11 (no lockfile drift). **GUI runtime UNVERIFIED**
+  (no display here). Branch feat/terax-port, NOT merged, NOT released.
+- NEXT: user GUI-tests on their machine (`cd ui && npm run tauri dev` on the
+  branch, or build it). Then merge → main + cut a release. Do NOT release blind.
+- Follow-ups noted: draggable pane resize + arbitrary nesting (currently flat
+  even split); theme background images; configurable (not just reference)
+  shortcuts; consider lifting the settings→pool effect to one global owner.
