@@ -5327,7 +5327,7 @@ dependencies = [
 
 [[package]]
 name = "tessera"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -5363,7 +5363,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-core"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "chrono",
  "dirs 5.0.1",
@@ -5377,7 +5377,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-git"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "anyhow",
  "git2",
@@ -5390,7 +5390,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-hook"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "anyhow",
  "serde",
@@ -5406,7 +5406,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-pty"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "anyhow",
  "portable-pty",
@@ -5421,7 +5421,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-store"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5437,7 +5437,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-term"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "serde",
  "serde_json",
@@ -5449,7 +5449,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-workspace"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "anyhow",
  "chrono",

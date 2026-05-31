@@ -14,19 +14,20 @@ fn main() {
 
     // WebKitGTK rendering mode (Linux only) — set before any webkit/GTK init.
     //
-    // WebKitGTK's DMA-BUF GPU renderer is mature as of 2.5x and gives smooth,
-    // low-latency compositing. An earlier build force-DISABLED it (a workaround
-    // for the buggy 2.42-era renderer), but on current WebKitGTK that drops the
-    // webview onto a CPU-side compositing fallback that repaints the *entire*
-    // webview every frame — which is itself the #1 cause of input lag: every
-    // keystroke echo blocks on a full software composite, in every pane. So we
-    // now leave the GPU path ON by default and expose an escape hatch for the
-    // minority of GPU/driver combos where it misbehaves (e.g. a black webview on
-    // some NVIDIA setups). A user-exported WEBKIT_* var always wins.
+    // WebKitGTK's accelerated (GPU) compositor is the #1 cause of input lag on
+    // Linux: it re-composites the *entire* webview through the GPU driver on every
+    // frame, so each keystroke echo stalls on a full composite — in every pane.
+    // On NVIDIA/X11 hybrids it's especially bad, and neither the DMA-BUF path nor
+    // disabling just DMA-BUF helps. The fix that actually makes typing snappy is
+    // disabling accelerated compositing entirely (software composite) — for a
+    // text app that's lower-latency and immune to GPU/driver jank. Confirmed on
+    // the reporter's NVIDIA+AMD / X11 / i3 box: only WEBKIT_DISABLE_COMPOSITING_MODE
+    // gave native-feeling input. So that's the DEFAULT now, with an opt-out for
+    // anyone whose GPU compositing is fine. A user-exported WEBKIT_* var wins.
     //
-    //   TESSERA_GPU unset / "auto" → WebKitGTK default DMA-BUF GPU renderer
-    //   TESSERA_GPU=no-dmabuf      → GPU compositing, but skip the DMA-BUF path
-    //   TESSERA_GPU=software|off   → disable accelerated compositing entirely
+    //   TESSERA_GPU unset / "software" / "off" → software compositing (default)
+    //   TESSERA_GPU=no-dmabuf                   → GPU compositing, skip DMA-BUF
+    //   TESSERA_GPU=gpu / "hardware" / "dmabuf" → full GPU/DMA-BUF compositing
     #[cfg(target_os = "linux")]
     {
         let disable = |key: &str| {
@@ -35,12 +36,9 @@ fn main() {
             }
         };
         match std::env::var("TESSERA_GPU").unwrap_or_default().as_str() {
-            "software" | "off" => {
-                disable("WEBKIT_DISABLE_COMPOSITING_MODE");
-                disable("WEBKIT_DISABLE_DMABUF_RENDERER");
-            }
+            "gpu" | "hardware" | "dmabuf" => {}
             "no-dmabuf" => disable("WEBKIT_DISABLE_DMABUF_RENDERER"),
-            _ => {}
+            _ => disable("WEBKIT_DISABLE_COMPOSITING_MODE"),
         }
     }
 

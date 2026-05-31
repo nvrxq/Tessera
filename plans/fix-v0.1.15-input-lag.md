@@ -84,5 +84,6 @@ Verified: tsc clean (only pre-existing Sidebar.test debt), `vite build` ok,
 - [x] TERM/COLORTERM on claude spawn
 - [x] paste fix (clipboard plugin + chunked b64 + Ctrl+V + image paste)
 - [x] build verify (cargo check/fmt/clippy, tsc, vite build)
-- [ ] user one-session verify: input A/B (TESSERA_GPU) + paste + resume
-- [ ] bake winning GPU default, bump 0.1.15, commit (nvrxq), tag, push, release
+- [x] bump 0.1.15, commit (nvrxq, 0c1e0e4), ff main, tag, push, release run #26 SUCCESS (published, latest.json v0.1.15)
+- [ ] user confirms GPU default is snappy (+ paste/resume) on the real app; else flip TESSERA_GPU default → 0.1.16
+User chose "ship now, tune live via env" (default = DMABUF/GPU on).
