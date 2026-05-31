@@ -12,13 +12,35 @@ fn main() {
         unsafe { libc::_exit(code) }
     }
 
-    // webkit2gtk's DMA-BUF renderer (default since 2.42) is the #1 cause of
-    // input lag and idle jitter on Linux/X11. Disable before any webkit/GTK
-    // init runs. User can override by exporting the var beforehand.
+    // WebKitGTK rendering mode (Linux only) — set before any webkit/GTK init.
+    //
+    // WebKitGTK's DMA-BUF GPU renderer is mature as of 2.5x and gives smooth,
+    // low-latency compositing. An earlier build force-DISABLED it (a workaround
+    // for the buggy 2.42-era renderer), but on current WebKitGTK that drops the
+    // webview onto a CPU-side compositing fallback that repaints the *entire*
+    // webview every frame — which is itself the #1 cause of input lag: every
+    // keystroke echo blocks on a full software composite, in every pane. So we
+    // now leave the GPU path ON by default and expose an escape hatch for the
+    // minority of GPU/driver combos where it misbehaves (e.g. a black webview on
+    // some NVIDIA setups). A user-exported WEBKIT_* var always wins.
+    //
+    //   TESSERA_GPU unset / "auto" → WebKitGTK default DMA-BUF GPU renderer
+    //   TESSERA_GPU=no-dmabuf      → GPU compositing, but skip the DMA-BUF path
+    //   TESSERA_GPU=software|off   → disable accelerated compositing entirely
     #[cfg(target_os = "linux")]
     {
-        if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        let disable = |key: &str| {
+            if std::env::var_os(key).is_none() {
+                std::env::set_var(key, "1");
+            }
+        };
+        match std::env::var("TESSERA_GPU").unwrap_or_default().as_str() {
+            "software" | "off" => {
+                disable("WEBKIT_DISABLE_COMPOSITING_MODE");
+                disable("WEBKIT_DISABLE_DMABUF_RENDERER");
+            }
+            "no-dmabuf" => disable("WEBKIT_DISABLE_DMABUF_RENDERER"),
+            _ => {}
         }
     }
 

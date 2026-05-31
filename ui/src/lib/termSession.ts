@@ -8,6 +8,7 @@
 // frontend dormant-ring or serialize-snapshot here.
 
 import { invoke } from "@tauri-apps/api/core";
+import { encodeBytesToB64 } from "./ipc";
 import {
   acquireSlot,
   configureRendererPool,
@@ -118,8 +119,8 @@ export function leafDims(leafId: number): { cols: number; rows: number } {
 export function writeLeaf(leafId: number, data: string): void {
   const sid = leaves.get(leafId)?.sessionId;
   if (!sid) return;
-  const bytes = TEXT_ENCODER.encode(data);
-  let bin = "";
-  for (const b of bytes) bin += String.fromCharCode(b);
-  void invoke("pty_write", { sessionId: sid, dataB64: btoa(bin) }).catch(() => {});
+  void invoke("pty_write", {
+    sessionId: sid,
+    dataB64: encodeBytesToB64(TEXT_ENCODER.encode(data)),
+  }).catch(() => {});
 }

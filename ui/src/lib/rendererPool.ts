@@ -17,6 +17,8 @@
 
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { readImage, readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { encodeBytesToB64 } from "./ipc";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -145,10 +147,75 @@ function termOptions() {
 function writeToPty(leafId: number, data: string): void {
   const sid = adapter?.sessionIdFor(leafId);
   if (!sid) return;
-  const bytes = TEXT_ENCODER.encode(data);
-  let bin = "";
-  for (const b of bytes) bin += String.fromCharCode(b);
-  void invoke("pty_write", { sessionId: sid, dataB64: btoa(bin) }).catch(() => {});
+  const dataB64 = encodeBytesToB64(TEXT_ENCODER.encode(data));
+  void invoke("pty_write", { sessionId: sid, dataB64 }).catch(() => {});
+}
+
+/** Copy the slot's selection via the Tauri clipboard plugin (Rust-side), not
+ *  `navigator.clipboard` — the WebKitGTK async-clipboard API is unreliable and
+ *  could block the webview. */
+function copySelection(slot: Slot): void {
+  if (!slot.term.hasSelection()) return;
+  const sel = slot.term.getSelection();
+  if (sel) void writeText(sel).catch(() => {});
+}
+
+/** Paste into the focused leaf. Text is the common (and cheapest) case; if the
+ *  clipboard holds no text we try an image — Claude Code treats a pasted
+ *  image-file path as an attachment, so a screenshot becomes a real attachment.
+ *
+ *  Reads go through the Tauri clipboard plugin instead of
+ *  `navigator.clipboard.readText()`, whose WebKitGTK implementation froze the
+ *  whole app on paste (especially with non-text/image clipboard content).
+ *  `term.paste()` respects the program's bracketed-paste mode. */
+async function pasteFromClipboard(slot: Slot): Promise<void> {
+  const leafId = slot.currentLeafId;
+  if (leafId === null) return;
+  try {
+    const text = await readText();
+    if (text) {
+      slot.term.paste(text);
+      return;
+    }
+  } catch {
+    // No text on the clipboard — fall through and try an image.
+  }
+  try {
+    const img = await readImage();
+    const { width, height } = await img.size();
+    const path = await saveClipboardImage(await img.rgba(), width, height);
+    if (path) slot.term.paste(path);
+  } catch {
+    // Nothing usable on the clipboard.
+  }
+}
+
+/** Re-encode raw RGBA (from the clipboard) to PNG via a canvas and hand it to
+ *  the backend, which writes a temp file and returns its path. */
+async function saveClipboardImage(
+  rgba: Uint8Array,
+  width: number,
+  height: number,
+): Promise<string | null> {
+  if (!width || !height || rgba.length < width * height * 4) return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.putImageData(
+    new ImageData(new Uint8ClampedArray(rgba), width, height),
+    0,
+    0,
+  );
+  const blob = await new Promise<Blob | null>((resolve) =>
+    canvas.toBlob((b) => resolve(b), "image/png"),
+  );
+  if (!blob) return null;
+  const buf = new Uint8Array(await blob.arrayBuffer());
+  return await invoke<string>("save_paste_image", {
+    dataB64: encodeBytesToB64(buf),
+  }).catch(() => null);
 }
 
 function resizePty(leafId: number, cols: number, rows: number): void {
@@ -267,8 +334,7 @@ function createSlot(): Slot {
       : event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey;
     if (copyMod && (event.code === "KeyC" || event.key.toLowerCase() === "c")) {
       if (event.type === "keydown" && slot.term.hasSelection()) {
-        const sel = slot.term.getSelection();
-        if (sel) void navigator.clipboard.writeText(sel).catch(() => {});
+        copySelection(slot);
         event.preventDefault();
         return false;
       }
@@ -277,19 +343,16 @@ function createSlot(): Slot {
         return false;
       }
     }
-    // Paste: macOS Cmd+V, others Ctrl+Shift+V.
+    // Paste: macOS Cmd+V; Linux/Windows plain Ctrl+V *and* Ctrl+Shift+V.
+    // Terminals historically reserve plain Ctrl+V (quoted-insert), but for a
+    // Claude TUI viewer users expect Ctrl+V to paste — so we accept it with or
+    // without Shift. We handle it ourselves and preventDefault so the unreliable
+    // native WebKitGTK paste path can't also fire (double paste / freeze).
     const pasteMod = IS_MAC
       ? event.metaKey && !event.ctrlKey && !event.altKey
-      : event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey;
+      : event.ctrlKey && !event.altKey && !event.metaKey;
     if (pasteMod && (event.code === "KeyV" || event.key.toLowerCase() === "v")) {
-      if (event.type === "keydown") {
-        void navigator.clipboard
-          .readText()
-          .then((text) => {
-            if (text) slot.term.paste(text);
-          })
-          .catch(() => {});
-      }
+      if (event.type === "keydown") void pasteFromClipboard(slot);
       event.preventDefault();
       return false;
     }

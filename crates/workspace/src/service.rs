@@ -354,6 +354,16 @@ impl WorkspaceService {
         // correct workspace per-process.
         let mut env = env;
         env.push(("TESSERA_WORKSPACE_ID".to_string(), workspace_id.to_string()));
+        // Give the child a sane terminal identity even when Tessera itself was
+        // launched without one (desktop launcher / i3 keybind → no inherited
+        // TERM). Without it, Claude Code/Ink can fall into a degraded,
+        // repaint-heavy mode. Matches `pty_spawn_shell`. Caller-provided values
+        // (none today) win.
+        for (k, v) in [("TERM", "xterm-256color"), ("COLORTERM", "truecolor")] {
+            if !env.iter().any(|(ek, _)| ek == k) {
+                env.push((k.to_string(), v.to_string()));
+            }
+        }
         let cfg = SessionConfig {
             program: program.to_string(),
             args: args.to_vec(),

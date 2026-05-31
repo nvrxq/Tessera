@@ -39,3 +39,20 @@ export function decodeB64ToBytes(b64: string): Uint8Array {
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
 }
+
+/**
+ * Base64-encode bytes for `pty_write` / `save_paste_image`.
+ *
+ * The naive `for (b of bytes) bin += String.fromCharCode(b)` is O(n²) (each
+ * `+=` reallocates the growing string) and froze the whole webview when a large
+ * block — or a screenshot — was pasted. Encoding in 32 KB chunks via
+ * `fromCharCode(...chunk)` is linear and stays under the call-argument limit.
+ */
+export function encodeBytesToB64(bytes: Uint8Array): string {
+  let bin = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(bin);
+}
